@@ -369,6 +369,25 @@ std::string buildFormatSpecifiers(const std::string& formatStr) {
     return formatSpecifiers;
 }
 
+std::vector<std::string> extractExpressionStrings(const std::string& formatStr) {
+    std::vector<std::string> expressions;
+    
+    size_t pos = 0;
+    while ((pos = formatStr.find('{', pos)) != std::string::npos) {
+        size_t endPos = formatStr.find('}', pos);
+        if (endPos == std::string::npos) {
+            throw std::runtime_error("Unclosed '{' in format string");
+        }
+        
+        std::string exprStr = formatStr.substr(pos + 1, endPos - pos - 1);
+        expressions.push_back(exprStr);
+        
+        pos = endPos + 1;
+    }
+    
+    return expressions;
+}
+
 llvm::Value* ExpressionCodeGen::codegenCall(CodeGen& context, CallExpr& expr) {
     auto& module = context.getModule();
     auto& builder = context.getBuilder();
@@ -396,13 +415,15 @@ llvm::Value* ExpressionCodeGen::codegenCall(CodeGen& context, CallExpr& expr) {
                         formatSpecifiers += "\n";
                     }
                     
-                    std::vector<Value*> args;
+                    auto exprStrings = extractExpressionStrings(formatStr);
                     
+                    std::vector<Value*> args;
                     auto formatSpecifierStr = builder.CreateGlobalStringPtr(formatSpecifiers);
                     args.push_back(formatSpecifierStr);
-                    
-                    for (size_t i = 1; i < expr.getArgs().size(); i++) {
-                        auto argValue = expr.getArgs()[i]->codegen(context);
+
+                    for (const auto& exprStr : exprStrings) {
+                        VariableExpr varExpr(exprStr);
+                        auto argValue = varExpr.codegen(context);
                         auto stringValue = convertToString(context, argValue);
                         args.push_back(stringValue);
                     }
