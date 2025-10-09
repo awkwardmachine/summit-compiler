@@ -135,13 +135,20 @@ public:
         return mp_cmp(&value, const_cast<mp_int*>(&other.value)) != MP_EQ;
     }
     
-    // Type bounds constants - make them all const
+    static const BigInt MIN_INT4;
+    static const BigInt MAX_INT4;
     static const BigInt MIN_INT8;
     static const BigInt MAX_INT8;
+    static const BigInt MIN_INT12;
+    static const BigInt MAX_INT12;
     static const BigInt MIN_INT16;
     static const BigInt MAX_INT16;
+    static const BigInt MIN_INT24;
+    static const BigInt MAX_INT24;
     static const BigInt MIN_INT32;
     static const BigInt MAX_INT32;
+    static const BigInt MIN_INT48;
+    static const BigInt MAX_INT48;
     static const BigInt MIN_INT64;
     static const BigInt MAX_INT64;
     static const BigInt MAX_UINT8;
@@ -150,6 +157,14 @@ public:
     static const BigInt MAX_UINT64;
     static const BigInt MIN_UINT0;
     static const BigInt MAX_UINT0;
+    static const BigInt MIN_UINT4;
+    static const BigInt MAX_UINT4;
+    static const BigInt MIN_UINT12;
+    static const BigInt MAX_UINT12;
+    static const BigInt MIN_UINT24;
+    static const BigInt MAX_UINT24;
+    static const BigInt MIN_UINT48;
+    static const BigInt MAX_UINT48;
     
 private:
     static BigInt createFromInt64(int64_t val) {

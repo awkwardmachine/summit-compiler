@@ -35,19 +35,7 @@ llvm::Value* ExpressionCodeGen::codegenNumber(CodeGen& context, NumberExpr& expr
     uint64_t absValue = 0;
     for (size_t i = startPos; i < strValue.length(); i++) {
         if (strValue[i] >= '0' && strValue[i] <= '9') {
-            if (absValue > (UINT64_MAX / 10)) {
-                throw std::runtime_error("Number literal too large: " + strValue + 
-                                       " exceeds maximum value of 18446744073709551615");
-            }
             absValue = absValue * 10 + (strValue[i] - '0');
-        }
-    }
-
-    if (!isNegative) {
-        BigInt maxUint64("18446744073709551615");
-        if (value > maxUint64) {
-            throw std::runtime_error("Number literal too large: " + strValue + 
-                                   " exceeds maximum value of 18446744073709551615");
         }
     }
 

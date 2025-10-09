@@ -2,10 +2,18 @@
 
 namespace AST {
     enum class VarType {
+        INT4,
         INT8,
-        INT16, 
+        INT12,
+        INT16,
+        INT24,
         INT32,
+        INT48,
         INT64,
+        UINT4,
+        UINT12,
+        UINT24,
+        UINT48,
         UINT8,
         UINT16,
         UINT32,

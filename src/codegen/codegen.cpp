@@ -24,13 +24,21 @@ CodeGen::CodeGen() {
 llvm::Type* CodeGen::getLLVMType(AST::VarType type) {
     auto& context = getContext();
     switch (type) {
+        case AST::VarType::INT4: return Type::getInt8Ty(context);
         case AST::VarType::INT8: return Type::getInt8Ty(context);
+        case AST::VarType::INT12: return Type::getInt16Ty(context);
         case AST::VarType::INT16: return Type::getInt16Ty(context);
+        case AST::VarType::INT24: return Type::getInt32Ty(context);
         case AST::VarType::INT32: return Type::getInt32Ty(context);
+        case AST::VarType::INT48: return Type::getInt64Ty(context);
         case AST::VarType::INT64: return Type::getInt64Ty(context);
+        case AST::VarType::UINT4: return Type::getInt8Ty(context);
         case AST::VarType::UINT8: return Type::getInt8Ty(context);
+        case AST::VarType::UINT12: return Type::getInt16Ty(context);
         case AST::VarType::UINT16: return Type::getInt16Ty(context);
+        case AST::VarType::UINT24: return Type::getInt32Ty(context);
         case AST::VarType::UINT32: return Type::getInt32Ty(context);
+        case AST::VarType::UINT48: return Type::getInt64Ty(context);
         case AST::VarType::UINT64: return Type::getInt64Ty(context);
         case AST::VarType::UINT0: return Type::getInt1Ty(context);
         case AST::VarType::STRING: return PointerType::get(Type::getInt8Ty(context), 0);
@@ -38,6 +46,7 @@ llvm::Type* CodeGen::getLLVMType(AST::VarType type) {
         default: throw std::runtime_error("Unknown type");
     }
 }
+
 bool CodeGen::isConstVariable(const std::string& name) {
     return constVariables.find(name) != constVariables.end();
 }

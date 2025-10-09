@@ -47,13 +47,21 @@ unique_ptr<Expr> Parser::parseExpression() {
 }
 
 AST::VarType Parser::parseType() {
+    if (match(TokenType::INT4)) return VarType::INT4;
     if (match(TokenType::INT8)) return VarType::INT8;
+    if (match(TokenType::INT12)) return VarType::INT12;
     if (match(TokenType::INT16)) return VarType::INT16;
+    if (match(TokenType::INT24)) return VarType::INT24;
     if (match(TokenType::INT32)) return VarType::INT32;
+    if (match(TokenType::INT48)) return VarType::INT48;
     if (match(TokenType::INT64)) return VarType::INT64;
+    if (match(TokenType::UINT4)) return VarType::UINT4;
     if (match(TokenType::UINT8)) return VarType::UINT8;
+    if (match(TokenType::UINT12)) return VarType::UINT12;
     if (match(TokenType::UINT16)) return VarType::UINT16;
+    if (match(TokenType::UINT24)) return VarType::UINT24;
     if (match(TokenType::UINT32)) return VarType::UINT32;
+    if (match(TokenType::UINT48)) return VarType::UINT48;
     if (match(TokenType::UINT64)) return VarType::UINT64;
     if (match(TokenType::UINT0)) return VarType::UINT0;
     if (match(TokenType::STRING)) return VarType::STRING;

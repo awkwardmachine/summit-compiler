@@ -8,15 +8,22 @@ using namespace std;
 static unordered_map<string, TokenType> keywords = {
     {"var", TokenType::VAR},
     {"const", TokenType::CONST},
+    {"int4", TokenType::INT4},
     {"int8", TokenType::INT8},
+    {"int12", TokenType::INT12},
     {"int16", TokenType::INT16},
+    {"int24", TokenType::INT24},
     {"int32", TokenType::INT32},
+    {"int48", TokenType::INT48},
     {"int64", TokenType::INT64},
-    {"uint0", TokenType::UINT0},
-    {"uint8", TokenType::UINT8},
+    {"uint4", TokenType::UINT4},
+    {"uint12", TokenType::UINT12},
+    {"uint24", TokenType::UINT24},
+    {"uint48", TokenType::UINT48},
     {"uint16", TokenType::UINT16},
     {"uint32", TokenType::UINT32},
     {"uint64", TokenType::UINT64},
+    {"uint0", TokenType::UINT0},
     {"str", TokenType::STRING}
 };
 
