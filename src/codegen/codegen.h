@@ -13,6 +13,7 @@ namespace AST {
     class NumberExpr;
     class StringExpr;
     class VariableExpr;
+    class BooleanExpr;
     class BinaryExpr;
     class CallExpr;
     class VariableDecl;
@@ -53,6 +54,7 @@ public:
     llvm::Value* codegen(AST::VariableDecl& decl);
     llvm::Value* codegen(AST::AssignmentStmt& stmt);
     llvm::Value* codegen(AST::ExprStmt& stmt);
+    llvm::Value* codegen(AST::BooleanExpr& expr);
     llvm::Value* codegen(AST::Program& program);
     
     void printIR();

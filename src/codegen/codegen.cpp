@@ -24,6 +24,7 @@ CodeGen::CodeGen() {
 llvm::Type* CodeGen::getLLVMType(AST::VarType type) {
     auto& context = getContext();
     switch (type) {
+        case AST::VarType::BOOL: return Type::getInt1Ty(context);
         case AST::VarType::INT4: return Type::getInt8Ty(context);
         case AST::VarType::INT8: return Type::getInt8Ty(context);
         case AST::VarType::INT12: return Type::getInt16Ty(context);
@@ -62,6 +63,10 @@ llvm::Value* CodeGen::codegen(StringExpr& expr) {
 
 llvm::Value* CodeGen::codegen(NumberExpr& expr) {
     return ExpressionCodeGen::codegenNumber(*this, expr);
+}
+
+llvm::Value* CodeGen::codegen(BooleanExpr& expr) {
+    return ExpressionCodeGen::codegenBoolean(*this, expr);
 }
 
 llvm::Value* CodeGen::codegen(VariableExpr& expr) {

@@ -1,3 +1,5 @@
 const x: uint12 = 4095;
+var flag: bool = true;
 
+@println(flag);
 @println(x);

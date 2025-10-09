@@ -67,15 +67,18 @@ llvm::Value* ExpressionCodeGen::codegenVariable(CodeGen& context, VariableExpr& 
         );
     }
 
-    if (typeIt != variableTypes.end() && typeIt->second == AST::VarType::UINT0) {
+    if (typeIt != variableTypes.end() && 
+        (typeIt->second == AST::VarType::BOOL || typeIt->second == AST::VarType::UINT0)) {
         return builder.CreateLoad(Type::getInt1Ty(context.getContext()), var, expr.getName().c_str());
     }
 
     bool isUnsigned = false;
     if (typeIt != variableTypes.end()) {
         auto varType = typeIt->second;
-        isUnsigned = (varType == AST::VarType::UINT8 || varType == AST::VarType::UINT16 || 
-                     varType == AST::VarType::UINT32 || varType == AST::VarType::UINT64);
+        isUnsigned = (varType == AST::VarType::UINT4 || varType == AST::VarType::UINT8 || 
+                     varType == AST::VarType::UINT12 || varType == AST::VarType::UINT16 || 
+                     varType == AST::VarType::UINT24 || varType == AST::VarType::UINT32 || 
+                     varType == AST::VarType::UINT48 || varType == AST::VarType::UINT64);
     }
 
     llvm::Type* loadType = Type::getInt64Ty(context.getContext());
@@ -307,4 +310,9 @@ llvm::Value* ExpressionCodeGen::codegenCall(CodeGen& context, CallExpr& expr) {
     }
     
     return builder.CreateCall(func, args);
+}
+
+llvm::Value* ExpressionCodeGen::codegenBoolean(CodeGen& context, BooleanExpr& expr) {
+    auto& builder = context.getBuilder();
+    return ConstantInt::get(Type::getInt1Ty(context.getContext()), expr.getValue() ? 1 : 0);
 }

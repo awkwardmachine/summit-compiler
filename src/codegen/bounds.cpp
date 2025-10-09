@@ -2,9 +2,10 @@
 #include "ast/ast.h"
 
 using namespace AST;
-
 bool TypeBounds::checkBounds(VarType type, const BigInt& value) {
     switch (type) {
+        case VarType::BOOL:
+            return value == BigInt("0") || value == BigInt("1");
         case VarType::INT4:
             return value >= BigInt::MIN_INT4 && value <= BigInt::MAX_INT4;
         case VarType::INT8:
@@ -48,6 +49,8 @@ bool TypeBounds::checkBounds(VarType type, const BigInt& value) {
 
 std::string TypeBounds::getTypeRange(VarType type) {
     switch (type) {
+        case VarType::BOOL:
+            return "true or false";
         case VarType::INT4:
             return BigInt::MIN_INT4.toString() + " to " + BigInt::MAX_INT4.toString();
         case VarType::INT8:
@@ -91,6 +94,7 @@ std::string TypeBounds::getTypeRange(VarType type) {
 
 std::string TypeBounds::getTypeName(VarType type) {
     switch (type) {
+        case VarType::BOOL: return "bool";
         case VarType::INT4: return "int4";
         case VarType::INT8: return "int8";
         case VarType::INT12: return "int12";

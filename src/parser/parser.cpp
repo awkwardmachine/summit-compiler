@@ -47,6 +47,7 @@ unique_ptr<Expr> Parser::parseExpression() {
 }
 
 AST::VarType Parser::parseType() {
+    if (match(TokenType::BOOL)) return VarType::BOOL;
     if (match(TokenType::INT4)) return VarType::INT4;
     if (match(TokenType::INT8)) return VarType::INT8;
     if (match(TokenType::INT12)) return VarType::INT12;
@@ -82,6 +83,9 @@ unique_ptr<Expr> Parser::parsePrimary() {
     if (match(TokenType::NUMBER)) return make_unique<NumberExpr>(tokens[current - 1].value);
     if (match(TokenType::STRING_LITERAL)) return make_unique<StringExpr>(tokens[current - 1].value);
     if (match(TokenType::BACKTICK_STRING)) return make_unique<StringExpr>(tokens[current - 1].value);
+
+    if (match(TokenType::TRUE)) return make_unique<BooleanExpr>(true);
+    if (match(TokenType::FALSE)) return make_unique<BooleanExpr>(false);
 
     if (match(TokenType::IDENTIFIER)) {
         string name = tokens[current - 1].value;

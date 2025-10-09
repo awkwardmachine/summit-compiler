@@ -36,6 +36,10 @@ llvm::Value* ExprStmt::codegen(::CodeGen& context) {
     return context.codegen(*this);
 }
 
+llvm::Value* BooleanExpr::codegen(::CodeGen& context) {
+    return context.codegen(*this);
+}
+
 llvm::Value* Program::codegen(::CodeGen& context) {
     return context.codegen(*this);
 }

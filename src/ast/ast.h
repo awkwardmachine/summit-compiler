@@ -39,6 +39,14 @@ public:
     const BigInt& getValue() const { return value; }
 };
 
+class BooleanExpr : public Expr {
+    bool value;
+public:
+    BooleanExpr(bool val) : value(val) {}
+    llvm::Value* codegen(::CodeGen& context) override;
+    bool getValue() const { return value; }
+};
+
 class VariableExpr : public Expr {
     std::string name;
 public:

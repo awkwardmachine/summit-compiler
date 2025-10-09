@@ -24,6 +24,9 @@ enum class TokenType {
     UINT32,
     UINT64,
     STRING,
+    BOOL,
+    TRUE,
+    FALSE,
     
     // Literals
     IDENTIFIER,

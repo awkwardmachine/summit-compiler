@@ -8,5 +8,6 @@ namespace ExpressionCodeGen {
     llvm::Value* codegenString(CodeGen& context, AST::StringExpr& expr);
     llvm::Value* codegenVariable(CodeGen& context, AST::VariableExpr& expr);
     llvm::Value* codegenBinary(CodeGen& context, AST::BinaryExpr& expr);
+    llvm::Value* codegenBoolean(CodeGen& context, AST::BooleanExpr& expr);
     llvm::Value* codegenCall(CodeGen& context, AST::CallExpr& expr);
 }
