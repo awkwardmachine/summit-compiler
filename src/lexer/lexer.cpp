@@ -28,6 +28,8 @@ static unordered_map<string, TokenType> keywords = {
     {"uint48", TokenType::UINT48},
     {"uint64", TokenType::UINT64},
     {"uint0", TokenType::UINT0},
+    {"float32", TokenType::FLOAT32},
+    {"float64", TokenType::FLOAT64},
     {"str", TokenType::STRING}
 };
 
@@ -87,12 +89,50 @@ void Lexer::skipComment() {
 Token Lexer::readNumber() {
     string number;
     size_t startLine = line, startCol = column;
+    bool isFloat = false;
+    bool hasExponent = false;
     
     while (isdigit(peek())) {
         number += advance();
     }
+
+    if (peek() == '.') {
+        isFloat = true;
+        number += advance();
+        
+        while (isdigit(peek())) {
+            number += advance();
+        }
+    }
     
-    return Token(TokenType::NUMBER, number, startLine, startCol);
+    if (peek() == 'e' || peek() == 'E') {
+        isFloat = true;
+        hasExponent = true;
+        number += advance();
+
+        if (peek() == '+' || peek() == '-') {
+            number += advance();
+        }
+        
+        while (isdigit(peek())) {
+            number += advance();
+        }
+    }
+    
+    if (isFloat) {
+        if (number.empty() || 
+            number == "." || 
+            number.back() == 'e' || 
+            number.back() == 'E' ||
+            number.back() == '+' || 
+            number.back() == '-') {
+            throw runtime_error("Invalid float literal: " + number);
+        }
+        
+        return Token(TokenType::FLOAT_LITERAL, number, startLine, startCol);
+    } else {
+        return Token(TokenType::NUMBER, number, startLine, startCol);
+    }
 }
 
 Token Lexer::readString() {
@@ -205,7 +245,7 @@ vector<Token> Lexer::tokenize() {
         
         size_t currentLine = line, currentCol = column;
         
-        if (isdigit(c)) {
+        if (isdigit(c) || (c == '.' && isdigit(input[position + 1]))) {
             tokens.push_back(readNumber());
         } else if (c == '"') {
             tokens.push_back(readString());

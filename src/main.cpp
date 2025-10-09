@@ -59,6 +59,7 @@ int main(int argc, char* argv[]) {
         CodeGen codegen;
         ast->codegen(codegen);
 
+        // codegen.printIR();
         codegen.printIRToFile(irFilename);
 
         if (compileToExecutable(irFilename, executableName)) {

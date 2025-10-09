@@ -23,6 +23,8 @@ enum class TokenType {
     UINT16,
     UINT32,
     UINT64,
+    FLOAT32,
+    FLOAT64,
     STRING,
     BOOL,
     TRUE,
@@ -32,6 +34,7 @@ enum class TokenType {
     IDENTIFIER,
     NUMBER,
     STRING_LITERAL,
+    FLOAT_LITERAL,
     BUILTIN,
     
     // Operators

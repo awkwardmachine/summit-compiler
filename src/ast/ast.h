@@ -39,6 +39,17 @@ public:
     const BigInt& getValue() const { return value; }
 };
 
+class FloatExpr : public Expr {
+private:
+    double value;
+    VarType floatType;
+public:
+    FloatExpr(double val, VarType type = VarType::FLOAT64) : value(val), floatType(type) {}
+    double getValue() const { return value; }
+    VarType getFloatType() const { return floatType; }
+    llvm::Value* codegen(CodeGen& context) override;
+};
+
 class BooleanExpr : public Expr {
     bool value;
 public:

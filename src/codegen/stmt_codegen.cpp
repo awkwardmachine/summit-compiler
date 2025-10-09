@@ -51,7 +51,42 @@ llvm::Value* StatementCodeGen::codegenVariableDecl(CodeGen& context, VariableDec
             builder.CreateStore(zero, alloca);
         }
         else {
-            if (auto numberExpr = dynamic_cast<NumberExpr*>(decl.getValue().get())) {
+            bool isFloatType = (decl.getType() == VarType::FLOAT32 || decl.getType() == VarType::FLOAT64);
+
+            if (isFloatType) {
+                if (value->getType()->isIntegerTy()) {
+                    value = builder.CreateSIToFP(value, varType);
+                } else if (value->getType()->isFPOrFPVectorTy() && value->getType() != varType) {
+                    if (decl.getType() == VarType::FLOAT32 && value->getType()->isDoubleTy()) {
+                        value = builder.CreateFPTrunc(value, varType);
+                    } else if (decl.getType() == VarType::FLOAT64 && value->getType()->isFloatTy()) {
+                        value = builder.CreateFPExt(value, varType);
+                    }
+                }
+                else if (auto floatExpr = dynamic_cast<FloatExpr*>(decl.getValue().get())) {
+                    if (decl.getType() == VarType::FLOAT32) {
+                        value = ConstantFP::get(Type::getFloatTy(context.getContext()), floatExpr->getValue());
+                    } else {
+                        value = ConstantFP::get(Type::getDoubleTy(context.getContext()), floatExpr->getValue());
+                    }
+                }
+            }
+            else if (!isFloatType && value->getType()->isFPOrFPVectorTy()) {
+                value = builder.CreateFPToSI(value, varType);
+
+                if (auto floatExpr = dynamic_cast<FloatExpr*>(decl.getValue().get())) {
+                    double floatValue = floatExpr->getValue();
+                    if (decl.getType() == VarType::INT32 && (floatValue < INT32_MIN || floatValue > INT32_MAX)) {
+                        throw std::runtime_error("Float value " + std::to_string(floatValue) + 
+                                               " out of bounds for int32");
+                    }
+                    if (decl.getType() == VarType::INT64 && (floatValue < INT64_MIN || floatValue > INT64_MAX)) {
+                        throw std::runtime_error("Float value " + std::to_string(floatValue) + 
+                                               " out of bounds for int64");
+                    }
+                }
+            }
+            else if (auto numberExpr = dynamic_cast<NumberExpr*>(decl.getValue().get())) {
                 const BigInt& bigValue = numberExpr->getValue();
                 if (!TypeBounds::checkBounds(decl.getType(), bigValue)) {
                     throw std::runtime_error(
@@ -62,7 +97,7 @@ llvm::Value* StatementCodeGen::codegenVariableDecl(CodeGen& context, VariableDec
                 }
             }
 
-            if (value->getType() != varType) {
+            if (!isFloatType && value->getType() != varType && value->getType()->isIntegerTy()) {
                 if (value->getType()->getIntegerBitWidth() < varType->getIntegerBitWidth()) {
                     value = builder.CreateSExt(value, varType);
                 } else {
@@ -70,12 +105,43 @@ llvm::Value* StatementCodeGen::codegenVariableDecl(CodeGen& context, VariableDec
                 }
             }
 
+            if (value->getType() != varType) {
+                if (decl.getType() == VarType::FLOAT32 && value->getType()->isDoubleTy()) {
+                    value = builder.CreateFPTrunc(value, varType);
+                }
+                else if (decl.getType() == VarType::FLOAT64 && value->getType()->isFloatTy()) {
+                    value = builder.CreateFPExt(value, varType);
+                }
+                else {
+                    std::string expectedType = varType->getTypeID() == Type::FloatTyID ? "float32" :
+                                              varType->getTypeID() == Type::DoubleTyID ? "float64" : "integer";
+                    std::string actualType = value->getType()->getTypeID() == Type::FloatTyID ? "float32" :
+                                            value->getType()->getTypeID() == Type::DoubleTyID ? "float64" : "integer";
+                    throw std::runtime_error("Type mismatch in variable declaration for " + decl.getName() + 
+                                           ": expected " + expectedType + ", got " + actualType);
+                }
+            }
+
             builder.CreateStore(value, alloca);
         }
     }
-    else if (decl.getType() == VarType::UINT0) {
-        auto zero = ConstantInt::get(Type::getInt1Ty(context.getContext()), 0);
-        builder.CreateStore(zero, alloca);
+    else {
+        if (decl.getType() == VarType::FLOAT32) {
+            auto zero = ConstantFP::get(Type::getFloatTy(context.getContext()), 0.0);
+            builder.CreateStore(zero, alloca);
+        }
+        else if (decl.getType() == VarType::FLOAT64) {
+            auto zero = ConstantFP::get(Type::getDoubleTy(context.getContext()), 0.0);
+            builder.CreateStore(zero, alloca);
+        }
+        else if (decl.getType() == VarType::UINT0) {
+            auto zero = ConstantInt::get(Type::getInt1Ty(context.getContext()), 0);
+            builder.CreateStore(zero, alloca);
+        }
+        else if (decl.getType() != VarType::STRING) {
+            auto zero = ConstantInt::get(varType, 0);
+            builder.CreateStore(zero, alloca);
+        }
     }
 
     context.getNamedValues()[decl.getName()] = alloca;
@@ -102,13 +168,48 @@ llvm::Value* StatementCodeGen::codegenAssignment(CodeGen& context, AssignmentStm
 
     auto& varTypes = context.getVariableTypes();
     auto it = varTypes.find(stmt.getName());
+    if (it == varTypes.end()) {
+        throw std::runtime_error("Unknown variable type for: " + stmt.getName());
+    }
 
-    if (it != varTypes.end() && it->second == VarType::UINT0) {
+    VarType varType = it->second;
+    
+    if (varType == VarType::UINT0) {
         throw std::runtime_error("Cannot assign to uint0 — value is always 0");
     }
 
     auto value = stmt.getValue()->codegen(context);
     auto& builder = context.getBuilder();
+    
+    llvm::Type* expectedType = context.getLLVMType(varType);
+    
+    if (value->getType() != expectedType) {
+        if (expectedType->isFPOrFPVectorTy() && value->getType()->isFPOrFPVectorTy()) {
+            if (varType == VarType::FLOAT32 && value->getType()->isDoubleTy()) {
+                value = builder.CreateFPTrunc(value, expectedType);
+            } else if (varType == VarType::FLOAT64 && value->getType()->isFloatTy()) {
+                value = builder.CreateFPExt(value, expectedType);
+            }
+        }
+        else if (expectedType->isFPOrFPVectorTy() && value->getType()->isIntegerTy()) {
+            value = builder.CreateSIToFP(value, expectedType);
+        }
+        else if (expectedType->isIntegerTy() && value->getType()->isFPOrFPVectorTy()) {
+            value = builder.CreateFPToSI(value, expectedType);
+        }
+        else if (expectedType->isIntegerTy() && value->getType()->isIntegerTy()) {
+            if (value->getType()->getIntegerBitWidth() < expectedType->getIntegerBitWidth()) {
+                value = builder.CreateSExt(value, expectedType);
+            } else {
+                value = builder.CreateTrunc(value, expectedType);
+            }
+        }
+    }
+    
+    if (value->getType() != expectedType) {
+        throw std::runtime_error("Type mismatch in assignment to variable: " + stmt.getName());
+    }
+
     builder.CreateStore(value, var);
     return value;
 }

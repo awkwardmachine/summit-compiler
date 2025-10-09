@@ -12,6 +12,10 @@ llvm::Value* NumberExpr::codegen(::CodeGen& context) {
     return context.codegen(*this);
 }
 
+llvm::Value* FloatExpr::codegen(::CodeGen& context) {
+    return context.codegen(*this);
+}
+
 llvm::Value* VariableExpr::codegen(::CodeGen& context) {
     return context.codegen(*this);
 }

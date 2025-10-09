@@ -1,5 +1,8 @@
 const x: uint12 = 4095;
 var flag: bool = true;
+const pi: float64 = 3.141595;
 
 @println(flag);
 @println(x);
+@println(pi);
+@println(x + pi);

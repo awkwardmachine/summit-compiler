@@ -20,6 +20,8 @@ namespace AST {
         UINT48,
         UINT64,
         UINT0,
+        FLOAT32,
+        FLOAT64,
         STRING,
         VOID
     };

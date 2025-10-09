@@ -42,6 +42,8 @@ llvm::Type* CodeGen::getLLVMType(AST::VarType type) {
         case AST::VarType::UINT48: return Type::getInt64Ty(context);
         case AST::VarType::UINT64: return Type::getInt64Ty(context);
         case AST::VarType::UINT0: return Type::getInt1Ty(context);
+        case AST::VarType::FLOAT32: return Type::getFloatTy(context);
+        case AST::VarType::FLOAT64: return Type::getDoubleTy(context);
         case AST::VarType::STRING: return PointerType::get(Type::getInt8Ty(context), 0);
         case AST::VarType::VOID: return Type::getVoidTy(context);
         default: throw std::runtime_error("Unknown type");
@@ -63,6 +65,10 @@ llvm::Value* CodeGen::codegen(StringExpr& expr) {
 
 llvm::Value* CodeGen::codegen(NumberExpr& expr) {
     return ExpressionCodeGen::codegenNumber(*this, expr);
+}
+
+llvm::Value* CodeGen::codegen(FloatExpr& expr) {
+    return ExpressionCodeGen::codegenFloat(*this, expr);
 }
 
 llvm::Value* CodeGen::codegen(BooleanExpr& expr) {

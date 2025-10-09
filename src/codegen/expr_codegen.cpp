@@ -47,6 +47,18 @@ llvm::Value* ExpressionCodeGen::codegenNumber(CodeGen& context, NumberExpr& expr
     }
 }
 
+llvm::Value* ExpressionCodeGen::codegenFloat(CodeGen& context, FloatExpr& expr) {
+    auto& builder = context.getBuilder();
+    switch (expr.getFloatType()) {
+        case AST::VarType::FLOAT32:
+            return ConstantFP::get(Type::getFloatTy(context.getContext()), (float)expr.getValue());
+        case AST::VarType::FLOAT64:
+            return ConstantFP::get(Type::getDoubleTy(context.getContext()), expr.getValue());
+        default:
+            throw std::runtime_error("Unsupported float type");
+    }
+}
+
 llvm::Value* ExpressionCodeGen::codegenVariable(CodeGen& context, VariableExpr& expr) {
     auto& namedValues = context.getNamedValues();
     auto var = namedValues[expr.getName()];
@@ -72,6 +84,12 @@ llvm::Value* ExpressionCodeGen::codegenVariable(CodeGen& context, VariableExpr& 
         return builder.CreateLoad(Type::getInt1Ty(context.getContext()), var, expr.getName().c_str());
     }
 
+    if (typeIt != variableTypes.end() && 
+        (typeIt->second == AST::VarType::FLOAT32 || typeIt->second == AST::VarType::FLOAT64)) {
+        llvm::Type* loadType = context.getLLVMType(typeIt->second);
+        return builder.CreateLoad(loadType, var, expr.getName().c_str());
+    }
+
     bool isUnsigned = false;
     if (typeIt != variableTypes.end()) {
         auto varType = typeIt->second;
@@ -94,7 +112,6 @@ llvm::Value* ExpressionCodeGen::codegenVariable(CodeGen& context, VariableExpr& 
     
     return loadedValue;
 }
-
 llvm::Value* ExpressionCodeGen::codegenBinary(CodeGen& context, BinaryExpr& expr) {
     auto lhs = expr.getLHS()->codegen(context);
     auto rhs = expr.getRHS()->codegen(context);
@@ -105,6 +122,47 @@ llvm::Value* ExpressionCodeGen::codegenBinary(CodeGen& context, BinaryExpr& expr
             return lhs;
         } else {
             throw std::runtime_error("Unsupported operation for strings");
+        }
+    }
+
+    bool lhsIsFloat = lhs->getType()->isFPOrFPVectorTy();
+    bool rhsIsFloat = rhs->getType()->isFPOrFPVectorTy();
+    
+    if (lhsIsFloat || rhsIsFloat) {
+        llvm::Type* resultType = nullptr;
+        if (lhs->getType()->isDoubleTy() || rhs->getType()->isDoubleTy()) {
+            resultType = Type::getDoubleTy(context.getContext());
+        } else {
+            resultType = Type::getFloatTy(context.getContext());
+        }
+
+        if (lhs->getType()->isIntegerTy()) {
+            lhs = builder.CreateSIToFP(lhs, resultType);
+        } else if (lhs->getType() != resultType) {
+            if (lhs->getType()->isFloatTy() && resultType->isDoubleTy()) {
+                lhs = builder.CreateFPExt(lhs, resultType);
+            }
+        }
+        
+        if (rhs->getType()->isIntegerTy()) {
+            rhs = builder.CreateSIToFP(rhs, resultType);
+        } else if (rhs->getType() != resultType) {
+            if (rhs->getType()->isFloatTy() && resultType->isDoubleTy()) {
+                rhs = builder.CreateFPExt(rhs, resultType);
+            }
+        }
+
+        switch (expr.getOp()) {
+            case BinaryOp::ADD: 
+                return builder.CreateFAdd(lhs, rhs, "faddtmp");
+            case BinaryOp::SUBTRACT: 
+                return builder.CreateFSub(lhs, rhs, "fsubtmp");
+            case BinaryOp::MULTIPLY: 
+                return builder.CreateFMul(lhs, rhs, "fmultmp");
+            case BinaryOp::DIVIDE: 
+                return builder.CreateFDiv(lhs, rhs, "fdivtmp");
+            default: 
+                throw std::runtime_error("Unknown binary operator for floats");
         }
     }
 
@@ -184,11 +242,23 @@ llvm::Value* convertToString(CodeGen& context, llvm::Value* value) {
         sprintfFunc = Function::Create(funcType, Function::ExternalLinkage, "sprintf", &module);
     }
 
-    const int BUFFER_SIZE = 32;
+    const int BUFFER_SIZE = 64;
     auto* buffer = builder.CreateCall(mallocFunc, {ConstantInt::get(builder.getInt64Ty(), BUFFER_SIZE)});
 
     llvm::Value* formatStr;
-    if (value->getType()->isIntegerTy(1)) {
+    
+    if (value->getType()->isFloatTy()) {
+        formatStr = builder.CreateGlobalStringPtr("%.6f");
+        value = builder.CreateFPExt(value, Type::getDoubleTy(llvmContext));
+        std::vector<Value*> sprintfArgs = {buffer, formatStr, value};
+        builder.CreateCall(sprintfFunc, sprintfArgs);
+    }
+    else if (value->getType()->isDoubleTy()) {
+        formatStr = builder.CreateGlobalStringPtr("%.15lf");
+        std::vector<Value*> sprintfArgs = {buffer, formatStr, value};
+        builder.CreateCall(sprintfFunc, sprintfArgs);
+    }
+    else if (value->getType()->isIntegerTy(1)) {
         auto zero64 = builder.CreateZExt(value, Type::getInt64Ty(llvmContext));
         formatStr = builder.CreateGlobalStringPtr("%s");
         auto trueStr = builder.CreateGlobalStringPtr("true");
@@ -204,7 +274,8 @@ llvm::Value* convertToString(CodeGen& context, llvm::Value* value) {
             strcpyFunc = Function::Create(funcType, Function::ExternalLinkage, "strcpy", &module);
         }
         builder.CreateCall(strcpyFunc, {buffer, boolStr});
-    } else {
+    } 
+    else {
         auto isLarge = builder.CreateICmpUGE(value, ConstantInt::get(value->getType(), 1ULL << 63));
 
         auto signedFormatStr = builder.CreateGlobalStringPtr("%ld");

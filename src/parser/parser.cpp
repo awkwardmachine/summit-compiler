@@ -65,9 +65,11 @@ AST::VarType Parser::parseType() {
     if (match(TokenType::UINT48)) return VarType::UINT48;
     if (match(TokenType::UINT64)) return VarType::UINT64;
     if (match(TokenType::UINT0)) return VarType::UINT0;
+    if (match(TokenType::FLOAT32)) return VarType::FLOAT32;
+    if (match(TokenType::FLOAT64)) return VarType::FLOAT64;
     if (match(TokenType::STRING)) return VarType::STRING;
     error("Expected type");
-    return VarType::INT32;
+    return VarType::VOID;
 }
 
 unique_ptr<Expr> Parser::parseExpressionFromString(const string& exprStr) {
@@ -81,6 +83,15 @@ unique_ptr<Expr> Parser::parsePrimary() {
     const Token& tok = peek();
     
     if (match(TokenType::NUMBER)) return make_unique<NumberExpr>(tokens[current - 1].value);
+    if (match(TokenType::FLOAT_LITERAL)) {
+        string floatStr = tokens[current - 1].value;
+        try {
+            double value = std::stod(floatStr);
+            return make_unique<FloatExpr>(value, VarType::FLOAT64);
+        } catch (const std::exception& e) {
+            error("Invalid float literal: " + floatStr);
+        }
+    }
     if (match(TokenType::STRING_LITERAL)) return make_unique<StringExpr>(tokens[current - 1].value);
     if (match(TokenType::BACKTICK_STRING)) return make_unique<StringExpr>(tokens[current - 1].value);
 

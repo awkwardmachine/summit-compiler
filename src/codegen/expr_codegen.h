@@ -10,4 +10,5 @@ namespace ExpressionCodeGen {
     llvm::Value* codegenBinary(CodeGen& context, AST::BinaryExpr& expr);
     llvm::Value* codegenBoolean(CodeGen& context, AST::BooleanExpr& expr);
     llvm::Value* codegenCall(CodeGen& context, AST::CallExpr& expr);
+    llvm::Value* codegenFloat(CodeGen& context, AST::FloatExpr& expr);
 }

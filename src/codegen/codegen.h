@@ -11,6 +11,7 @@
 namespace AST {
     enum class VarType;
     class NumberExpr;
+    class FloatExpr;
     class StringExpr;
     class VariableExpr;
     class BooleanExpr;
@@ -47,6 +48,7 @@ public:
     void createPrintlnFunction();
     
     llvm::Value* codegen(AST::NumberExpr& expr);
+    llvm::Value* codegen(AST::FloatExpr& expr);
     llvm::Value* codegen(AST::StringExpr& expr);
     llvm::Value* codegen(AST::VariableExpr& expr);
     llvm::Value* codegen(AST::BinaryExpr& expr);
