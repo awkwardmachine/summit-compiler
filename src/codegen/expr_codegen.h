@@ -11,4 +11,5 @@ namespace ExpressionCodeGen {
     llvm::Value* codegenBoolean(CodeGen& context, AST::BooleanExpr& expr);
     llvm::Value* codegenCall(CodeGen& context, AST::CallExpr& expr);
     llvm::Value* codegenFloat(CodeGen& context, AST::FloatExpr& expr);
+    llvm::Value* codegenCast(CodeGen& context, AST::CastExpr& expr);
 }

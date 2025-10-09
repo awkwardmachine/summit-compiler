@@ -18,6 +18,7 @@ namespace AST {
     class BinaryExpr;
     class CallExpr;
     class VariableDecl;
+    class CastExpr;
     class AssignmentStmt;
     class ExprStmt;
     class Program;
@@ -53,6 +54,7 @@ public:
     llvm::Value* codegen(AST::VariableExpr& expr);
     llvm::Value* codegen(AST::BinaryExpr& expr);
     llvm::Value* codegen(AST::CallExpr& expr);
+    llvm::Value* codegen(AST::CastExpr& expr);
     llvm::Value* codegen(AST::VariableDecl& decl);
     llvm::Value* codegen(AST::AssignmentStmt& stmt);
     llvm::Value* codegen(AST::ExprStmt& stmt);

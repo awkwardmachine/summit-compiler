@@ -5,6 +5,7 @@
 #include <llvm/IR/Value.h>
 #include "utils/bigint.h"
 #include "ast/ast_types.h"
+#include "codegen/bounds.h"
 
 class CodeGen;
 
@@ -88,6 +89,23 @@ public:
     llvm::Value* codegen(::CodeGen& context) override;
     const std::string& getCallee() const { return callee; }
     const std::vector<std::unique_ptr<Expr>>& getArgs() const { return args; }
+};
+
+class CastExpr : public Expr {
+    std::unique_ptr<Expr> expr;
+    VarType targetType;
+public:
+    CastExpr(std::unique_ptr<Expr> expr, VarType targetType)
+        : expr(std::move(expr)), targetType(targetType) {}
+    
+    llvm::Value* codegen(::CodeGen& context) override;
+    
+    Expr* getExpr() const { return expr.get(); }
+    VarType getTargetType() const { return targetType; }
+    
+    std::string toString() const {
+        return "CastExpr<" + std::to_string(static_cast<int>(targetType)) + ">";
+    }
 };
 
 class VariableDecl : public Stmt {

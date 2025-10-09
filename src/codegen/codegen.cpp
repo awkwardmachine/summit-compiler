@@ -87,6 +87,10 @@ llvm::Value* CodeGen::codegen(CallExpr& expr) {
     return ExpressionCodeGen::codegenCall(*this, expr);
 }
 
+llvm::Value* CodeGen::codegen(CastExpr& expr) {
+    return ExpressionCodeGen::codegenCast(*this, expr);
+}
+
 llvm::Value* CodeGen::codegen(VariableDecl& decl) {
     return StatementCodeGen::codegenVariableDecl(*this, decl);
 }

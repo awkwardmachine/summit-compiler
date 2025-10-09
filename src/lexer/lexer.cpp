@@ -305,6 +305,18 @@ vector<Token> Lexer::tokenize() {
                     tokens.push_back(Token(TokenType::RBRACE, "}", currentLine, currentCol));
                     advance();
                     break;
+                case '.':
+                    tokens.push_back(Token(TokenType::DOT, ".", currentLine, currentCol));
+                    advance();
+                    break;
+                case '<':
+                    tokens.push_back(Token(TokenType::LESS, "<", currentLine, currentCol));
+                    advance();
+                    break;
+                case '>':
+                    tokens.push_back(Token(TokenType::GREATER, ">", currentLine, currentCol));
+                    advance();
+                    break;
                 default:
                     tokens.push_back(Token(TokenType::UNKNOWN, string(1, c), currentLine, currentCol));
                     advance();

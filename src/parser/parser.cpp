@@ -79,7 +79,7 @@ unique_ptr<Expr> Parser::parseExpressionFromString(const string& exprStr) {
     return tempParser.parseExpression();
 }
 
-unique_ptr<Expr> Parser::parsePrimary() {
+unique_ptr<Expr> Parser::parseAtom() {
     const Token& tok = peek();
     
     if (match(TokenType::NUMBER)) return make_unique<NumberExpr>(tokens[current - 1].value);
@@ -169,6 +169,48 @@ unique_ptr<Expr> Parser::parsePrimary() {
     string errorMsg = "Expected expression, but found: " + tok.value;
     error(errorMsg);
     return nullptr;
+}
+
+unique_ptr<Expr> Parser::parsePrimary() {
+    auto expr = parseAtom();
+    
+    while (true) {
+        if (match(TokenType::DOT)) {
+            if (!match(TokenType::IDENTIFIER)) {
+                error("Expected method name after '.'");
+            }
+            
+            string methodName = tokens[current - 1].value;
+            
+            if (methodName == "cast_to") {
+                if (!match(TokenType::LESS)) {
+                    error("Expected '<' after 'cast_to'");
+                }
+                
+                VarType targetType = parseType();
+                
+                if (!match(TokenType::GREATER)) {
+                    error("Expected '>' after type in cast_to");
+                }
+                
+                if (!match(TokenType::LPAREN)) {
+                    error("Expected '(' after cast_to<type>");
+                }
+                
+                if (!match(TokenType::RPAREN)) {
+                    error("Expected ')' in cast_to");
+                }
+                
+                expr = make_unique<CastExpr>(move(expr), targetType);
+            } else {
+                error("Unknown method: " + methodName);
+            }
+        } else {
+            break;
+        }
+    }
+    
+    return expr;
 }
 
 vector<unique_ptr<Expr>> Parser::extractExpressionsFromFormat(const string& formatStr) {

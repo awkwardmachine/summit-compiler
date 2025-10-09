@@ -23,7 +23,7 @@ class Parser {
     std::unique_ptr<AST::Expr> parsePrimary();
     std::unique_ptr<AST::Expr> parseBinaryExpression(int minPrecedence);
     std::unique_ptr<AST::Expr> parseCallExpression();
-
+    std::unique_ptr<AST::Expr> parseAtom();
 
     std::unique_ptr<AST::Expr> parseExpressionFromString(const std::string& exprStr);
     std::vector<std::unique_ptr<AST::Expr>> extractExpressionsFromFormat(const std::string& formatStr);

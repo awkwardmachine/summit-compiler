@@ -43,6 +43,9 @@ enum class TokenType {
     MINUS,
     STAR,
     SLASH,
+    DOT,
+    LESS,
+    GREATER,
     
     // Punctuation
     COLON,

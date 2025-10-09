@@ -2,6 +2,7 @@
 #include "ast/ast.h"
 
 using namespace AST;
+
 bool TypeBounds::checkBounds(VarType type, const BigInt& value) {
     switch (type) {
         case VarType::BOOL:
@@ -112,8 +113,105 @@ std::string TypeBounds::getTypeName(VarType type) {
         case VarType::UINT48: return "uint48";
         case VarType::UINT64: return "uint64";
         case VarType::UINT0: return "uint0";
+        case VarType::FLOAT32: return "float32";
+        case VarType::FLOAT64: return "float64";
         case VarType::STRING: return "str";
         case VarType::VOID: return "void";
         default: return "unknown";
     }
+}
+
+bool TypeBounds::isCastValid(VarType fromType, VarType toType) {
+    if (toType == VarType::STRING) {
+        return true;
+    }
+    
+    if (fromType == VarType::STRING && toType != VarType::STRING) {
+        return false;
+    }
+
+    if (fromType == toType) {
+        return true;
+    }
+    
+    if (isNumericType(fromType) && isNumericType(toType)) {
+        return true;
+    }
+
+    if (fromType == VarType::BOOL && isIntegerType(toType)) {
+        return true;
+    }
+    
+    if (isIntegerType(fromType) && toType == VarType::BOOL) {
+        return true;
+    }
+    
+    return false;
+}
+
+bool TypeBounds::isNumericType(VarType type) {
+    return isIntegerType(type) || isFloatType(type) || type == VarType::BOOL;
+}
+
+bool TypeBounds::isIntegerType(VarType type) {
+    return (type == VarType::INT4 || type == VarType::INT8 || type == VarType::INT12 || 
+            type == VarType::INT16 || type == VarType::INT24 || type == VarType::INT32 || 
+            type == VarType::INT48 || type == VarType::INT64 ||
+            type == VarType::UINT4 || type == VarType::UINT8 || type == VarType::UINT12 || 
+            type == VarType::UINT16 || type == VarType::UINT24 || type == VarType::UINT32 || 
+            type == VarType::UINT48 || type == VarType::UINT64 || type == VarType::UINT0);
+}
+
+bool TypeBounds::isFloatType(VarType type) {
+    return (type == VarType::FLOAT32 || type == VarType::FLOAT64);
+}
+
+size_t TypeBounds::getTypeBitWidth(VarType type) {
+    switch (type) {
+        case VarType::BOOL: return 1;
+        case VarType::INT4: case VarType::UINT4: return 4;
+        case VarType::INT8: case VarType::UINT8: return 8;
+        case VarType::INT12: case VarType::UINT12: return 12;
+        case VarType::INT16: case VarType::UINT16: return 16;
+        case VarType::INT24: case VarType::UINT24: return 24;
+        case VarType::INT32: case VarType::UINT32: return 32;
+        case VarType::INT48: case VarType::UINT48: return 48;
+        case VarType::INT64: case VarType::UINT64: return 64;
+        case VarType::FLOAT32: return 32;
+        case VarType::FLOAT64: return 64;
+        case VarType::UINT0: return 1;
+        default: return 0;
+    }
+}
+
+bool TypeBounds::requiresBoundsCheck(VarType fromType, VarType toType) {
+    if (fromType == toType) return false;
+    if (toType == VarType::STRING || fromType == VarType::STRING) return false;
+    if (toType == VarType::BOOL || fromType == VarType::BOOL) return false;
+    if (isFloatType(fromType) || isFloatType(toType)) return false;
+    
+    if (isIntegerType(fromType) && isIntegerType(toType)) {
+        size_t fromBits = getTypeBitWidth(fromType);
+        size_t toBits = getTypeBitWidth(toType);
+        
+        if (toBits < fromBits) return true;
+        
+        bool fromUnsigned = isUnsignedType(fromType);
+        bool toSigned = (toType == VarType::INT4 || toType == VarType::INT8 || 
+                        toType == VarType::INT12 || toType == VarType::INT16 || 
+                        toType == VarType::INT24 || toType == VarType::INT32 || 
+                        toType == VarType::INT48 || toType == VarType::INT64);
+        
+        if (fromUnsigned && toSigned && fromBits == toBits) return true;
+    }
+    
+    return false;
+}
+
+bool TypeBounds::isUnsignedType(VarType type) {
+    return (type == VarType::UINT4 || type == VarType::UINT8 || 
+            type == VarType::UINT12 || type == VarType::UINT16 ||
+            type == VarType::UINT24 || type == VarType::UINT32 || 
+            type == VarType::UINT48 || type == VarType::UINT64 ||
+            type == VarType::UINT0);
 }

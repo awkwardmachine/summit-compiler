@@ -1,8 +1,3 @@
-const x: uint12 = 4095;
-var flag: bool = true;
-const pi: float64 = 3.141595;
+const pi: float64 = 3.141592653;
 
-@println(flag);
-@println(x);
-@println(pi);
-@println(x + pi);
+@println(pi.cast_to<float32>());

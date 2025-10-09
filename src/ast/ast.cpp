@@ -44,6 +44,10 @@ llvm::Value* BooleanExpr::codegen(::CodeGen& context) {
     return context.codegen(*this);
 }
 
+llvm::Value* CastExpr::codegen(::CodeGen& context) {
+    return context.codegen(*this);
+}
+
 llvm::Value* Program::codegen(::CodeGen& context) {
     return context.codegen(*this);
 }

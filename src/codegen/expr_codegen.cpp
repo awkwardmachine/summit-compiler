@@ -13,6 +13,98 @@
 using namespace llvm;
 using namespace AST;
 
+VarType inferSourceType(llvm::Value* value, CodeGen& context) {
+    if (value->getType()->isFloatTy()) return VarType::FLOAT32;
+    if (value->getType()->isDoubleTy()) return VarType::FLOAT64;
+    if (value->getType()->isIntegerTy(1)) return VarType::BOOL;
+    if (value->getType()->isPointerTy()) return VarType::STRING;
+    
+    if (value->getType()->isIntegerTy()) {
+        return VarType::INT64;
+    }
+    
+    return VarType::VOID;
+}
+
+bool isConvertibleToString(llvm::Value* value) {
+    return value->getType()->isIntegerTy() || 
+           value->getType()->isIntegerTy(1);
+}
+
+llvm::Value* convertToString(CodeGen& context, llvm::Value* value) {
+    auto& builder = context.getBuilder();
+    auto& module = context.getModule();
+    auto& llvmContext = context.getContext();
+    
+    if (value->getType()->isPointerTy()) {
+        return value;
+    }
+
+    auto mallocFunc = module.getFunction("malloc");
+    if (!mallocFunc) {
+        auto* i8Ptr = PointerType::get(Type::getInt8Ty(llvmContext), 0);
+        auto* sizeT = Type::getInt64Ty(llvmContext);
+        auto mallocType = FunctionType::get(i8Ptr, {sizeT}, false);
+        mallocFunc = Function::Create(mallocType, Function::ExternalLinkage, "malloc", &module);
+    }
+    
+    auto sprintfFunc = module.getFunction("sprintf");
+    if (!sprintfFunc) {
+        auto* i8Ptr = PointerType::get(Type::getInt8Ty(llvmContext), 0);
+        auto* i32 = Type::getInt32Ty(llvmContext);
+        std::vector<Type*> paramTypes = {i8Ptr, i8Ptr};
+        auto funcType = FunctionType::get(i32, paramTypes, true);
+        sprintfFunc = Function::Create(funcType, Function::ExternalLinkage, "sprintf", &module);
+    }
+
+    const int BUFFER_SIZE = 64;
+    auto* buffer = builder.CreateCall(mallocFunc, {ConstantInt::get(builder.getInt64Ty(), BUFFER_SIZE)});
+
+    llvm::Value* formatStr;
+    
+    if (value->getType()->isFloatTy()) {
+        formatStr = builder.CreateGlobalStringPtr("%.6f");
+        value = builder.CreateFPExt(value, Type::getDoubleTy(llvmContext));
+        std::vector<Value*> sprintfArgs = {buffer, formatStr, value};
+        builder.CreateCall(sprintfFunc, sprintfArgs);
+    }
+    else if (value->getType()->isDoubleTy()) {
+        formatStr = builder.CreateGlobalStringPtr("%.15lf");
+        std::vector<Value*> sprintfArgs = {buffer, formatStr, value};
+        builder.CreateCall(sprintfFunc, sprintfArgs);
+    }
+    else if (value->getType()->isIntegerTy(1)) {
+        auto zero64 = builder.CreateZExt(value, Type::getInt64Ty(llvmContext));
+        formatStr = builder.CreateGlobalStringPtr("%s");
+        auto trueStr = builder.CreateGlobalStringPtr("true");
+        auto falseStr = builder.CreateGlobalStringPtr("false");
+        auto isTrue = builder.CreateICmpNE(zero64, ConstantInt::get(zero64->getType(), 0));
+        auto boolStr = builder.CreateSelect(isTrue, trueStr, falseStr);
+        
+        auto strcpyFunc = module.getFunction("strcpy");
+        if (!strcpyFunc) {
+            auto* i8Ptr = PointerType::get(Type::getInt8Ty(llvmContext), 0);
+            std::vector<Type*> paramTypes = {i8Ptr, i8Ptr};
+            auto funcType = FunctionType::get(i8Ptr, paramTypes, false);
+            strcpyFunc = Function::Create(funcType, Function::ExternalLinkage, "strcpy", &module);
+        }
+        builder.CreateCall(strcpyFunc, {buffer, boolStr});
+    } 
+    else {
+        auto isLarge = builder.CreateICmpUGE(value, ConstantInt::get(value->getType(), 1ULL << 63));
+
+        auto signedFormatStr = builder.CreateGlobalStringPtr("%ld");
+        auto unsignedFormatStr = builder.CreateGlobalStringPtr("%lu");
+        
+        formatStr = builder.CreateSelect(isLarge, unsignedFormatStr, signedFormatStr);
+        
+        std::vector<Value*> sprintfArgs = {buffer, formatStr, value};
+        builder.CreateCall(sprintfFunc, sprintfArgs);
+    }
+    
+    return buffer;
+}
+
 llvm::Value* ExpressionCodeGen::codegenString(CodeGen& context, StringExpr& expr) {
     auto& builder = context.getBuilder();
     const std::string& strValue = expr.getValue();
@@ -112,17 +204,77 @@ llvm::Value* ExpressionCodeGen::codegenVariable(CodeGen& context, VariableExpr& 
     
     return loadedValue;
 }
+
 llvm::Value* ExpressionCodeGen::codegenBinary(CodeGen& context, BinaryExpr& expr) {
     auto lhs = expr.getLHS()->codegen(context);
     auto rhs = expr.getRHS()->codegen(context);
     auto& builder = context.getBuilder();
 
-    if (lhs->getType()->isPointerTy() && rhs->getType()->isPointerTy()) {
-        if (expr.getOp() == BinaryOp::ADD) {
-            return lhs;
-        } else {
-            throw std::runtime_error("Unsupported operation for strings");
+    if (expr.getOp() == BinaryOp::ADD) {
+        bool lhsIsString = lhs->getType()->isPointerTy();
+        bool rhsIsString = rhs->getType()->isPointerTy();
+        
+        if (lhsIsString || rhsIsString) {
+            if (!lhsIsString && !isConvertibleToString(lhs)) {
+                throw std::runtime_error("Left operand cannot be converted to string for concatenation");
+            }
+            if (!rhsIsString && !isConvertibleToString(rhs)) {
+                throw std::runtime_error("Right operand cannot be converted to string for concatenation");
+            }
+            
+            auto& module = context.getModule();
+            auto& llvmContext = context.getContext();
+            llvm::Value* lhsStr = lhsIsString ? lhs : convertToString(context, lhs);
+            llvm::Value* rhsStr = rhsIsString ? rhs : convertToString(context, rhs);
+            
+            auto strlenFunc = module.getFunction("strlen");
+            if (!strlenFunc) {
+                auto* i8Ptr = PointerType::get(Type::getInt8Ty(llvmContext), 0);
+                auto* sizeT = Type::getInt64Ty(llvmContext);
+                auto strlenType = FunctionType::get(sizeT, {i8Ptr}, false);
+                strlenFunc = Function::Create(strlenType, Function::ExternalLinkage, "strlen", &module);
+            }
+            
+            auto mallocFunc = module.getFunction("malloc");
+            if (!mallocFunc) {
+                auto* i8Ptr = PointerType::get(Type::getInt8Ty(llvmContext), 0);
+                auto* sizeT = Type::getInt64Ty(llvmContext);
+                auto mallocType = FunctionType::get(i8Ptr, {sizeT}, false);
+                mallocFunc = Function::Create(mallocType, Function::ExternalLinkage, "malloc", &module);
+            }
+            
+            auto strcpyFunc = module.getFunction("strcpy");
+            if (!strcpyFunc) {
+                auto* i8Ptr = PointerType::get(Type::getInt8Ty(llvmContext), 0);
+                std::vector<Type*> paramTypes = {i8Ptr, i8Ptr};
+                auto funcType = FunctionType::get(i8Ptr, paramTypes, false);
+                strcpyFunc = Function::Create(funcType, Function::ExternalLinkage, "strcpy", &module);
+            }
+            
+            auto strcatFunc = module.getFunction("strcat");
+            if (!strcatFunc) {
+                auto* i8Ptr = PointerType::get(Type::getInt8Ty(llvmContext), 0);
+                std::vector<Type*> paramTypes = {i8Ptr, i8Ptr};
+                auto funcType = FunctionType::get(i8Ptr, paramTypes, false);
+                strcatFunc = Function::Create(funcType, Function::ExternalLinkage, "strcat", &module);
+            }
+            
+            auto lhsLen = builder.CreateCall(strlenFunc, {lhsStr});
+            auto rhsLen = builder.CreateCall(strlenFunc, {rhsStr});
+            auto totalLen = builder.CreateAdd(lhsLen, rhsLen);
+            auto bufferSize = builder.CreateAdd(totalLen, ConstantInt::get(llvmContext, APInt(64, 1)));
+            
+            auto buffer = builder.CreateCall(mallocFunc, {bufferSize});
+
+            builder.CreateCall(strcpyFunc, {buffer, lhsStr});
+            builder.CreateCall(strcatFunc, {buffer, rhsStr});
+            
+            return buffer;
         }
+    }
+
+    if ((lhs->getType()->isPointerTy() || rhs->getType()->isPointerTy()) && expr.getOp() != BinaryOp::ADD) {
+        throw std::runtime_error("Unsupported operation for string types");
     }
 
     bool lhsIsFloat = lhs->getType()->isFPOrFPVectorTy();
@@ -215,79 +367,6 @@ std::string buildFormatSpecifiers(const std::string& formatStr) {
     }
     
     return formatSpecifiers;
-}
-llvm::Value* convertToString(CodeGen& context, llvm::Value* value) {
-    auto& builder = context.getBuilder();
-    auto& module = context.getModule();
-    auto& llvmContext = context.getContext();
-    
-    if (value->getType()->isPointerTy()) {
-        return value;
-    }
-
-    auto mallocFunc = module.getFunction("malloc");
-    if (!mallocFunc) {
-        auto* i8Ptr = PointerType::get(Type::getInt8Ty(llvmContext), 0);
-        auto* sizeT = Type::getInt64Ty(llvmContext);
-        auto mallocType = FunctionType::get(i8Ptr, {sizeT}, false);
-        mallocFunc = Function::Create(mallocType, Function::ExternalLinkage, "malloc", &module);
-    }
-    
-    auto sprintfFunc = module.getFunction("sprintf");
-    if (!sprintfFunc) {
-        auto* i8Ptr = PointerType::get(Type::getInt8Ty(llvmContext), 0);
-        auto* i32 = Type::getInt32Ty(llvmContext);
-        std::vector<Type*> paramTypes = {i8Ptr, i8Ptr};
-        auto funcType = FunctionType::get(i32, paramTypes, true);
-        sprintfFunc = Function::Create(funcType, Function::ExternalLinkage, "sprintf", &module);
-    }
-
-    const int BUFFER_SIZE = 64;
-    auto* buffer = builder.CreateCall(mallocFunc, {ConstantInt::get(builder.getInt64Ty(), BUFFER_SIZE)});
-
-    llvm::Value* formatStr;
-    
-    if (value->getType()->isFloatTy()) {
-        formatStr = builder.CreateGlobalStringPtr("%.6f");
-        value = builder.CreateFPExt(value, Type::getDoubleTy(llvmContext));
-        std::vector<Value*> sprintfArgs = {buffer, formatStr, value};
-        builder.CreateCall(sprintfFunc, sprintfArgs);
-    }
-    else if (value->getType()->isDoubleTy()) {
-        formatStr = builder.CreateGlobalStringPtr("%.15lf");
-        std::vector<Value*> sprintfArgs = {buffer, formatStr, value};
-        builder.CreateCall(sprintfFunc, sprintfArgs);
-    }
-    else if (value->getType()->isIntegerTy(1)) {
-        auto zero64 = builder.CreateZExt(value, Type::getInt64Ty(llvmContext));
-        formatStr = builder.CreateGlobalStringPtr("%s");
-        auto trueStr = builder.CreateGlobalStringPtr("true");
-        auto falseStr = builder.CreateGlobalStringPtr("false");
-        auto isTrue = builder.CreateICmpNE(zero64, ConstantInt::get(zero64->getType(), 0));
-        auto boolStr = builder.CreateSelect(isTrue, trueStr, falseStr);
-        
-        auto strcpyFunc = module.getFunction("strcpy");
-        if (!strcpyFunc) {
-            auto* i8Ptr = PointerType::get(Type::getInt8Ty(llvmContext), 0);
-            std::vector<Type*> paramTypes = {i8Ptr, i8Ptr};
-            auto funcType = FunctionType::get(i8Ptr, paramTypes, false);
-            strcpyFunc = Function::Create(funcType, Function::ExternalLinkage, "strcpy", &module);
-        }
-        builder.CreateCall(strcpyFunc, {buffer, boolStr});
-    } 
-    else {
-        auto isLarge = builder.CreateICmpUGE(value, ConstantInt::get(value->getType(), 1ULL << 63));
-
-        auto signedFormatStr = builder.CreateGlobalStringPtr("%ld");
-        auto unsignedFormatStr = builder.CreateGlobalStringPtr("%lu");
-        
-        formatStr = builder.CreateSelect(isLarge, unsignedFormatStr, signedFormatStr);
-        
-        std::vector<Value*> sprintfArgs = {buffer, formatStr, value};
-        builder.CreateCall(sprintfFunc, sprintfArgs);
-    }
-    
-    return buffer;
 }
 
 llvm::Value* ExpressionCodeGen::codegenCall(CodeGen& context, CallExpr& expr) {
@@ -386,4 +465,91 @@ llvm::Value* ExpressionCodeGen::codegenCall(CodeGen& context, CallExpr& expr) {
 llvm::Value* ExpressionCodeGen::codegenBoolean(CodeGen& context, BooleanExpr& expr) {
     auto& builder = context.getBuilder();
     return ConstantInt::get(Type::getInt1Ty(context.getContext()), expr.getValue() ? 1 : 0);
+}
+
+llvm::Value* ExpressionCodeGen::codegenCast(CodeGen& context, CastExpr& expr) {
+    auto value = expr.getExpr()->codegen(context);
+    auto& builder = context.getBuilder();
+    auto& llvmContext = context.getContext();
+    
+    VarType targetType = expr.getTargetType();
+    
+    VarType sourceType = inferSourceType(value, context);
+    if (!TypeBounds::isCastValid(sourceType, targetType)) {
+        throw std::runtime_error("Invalid cast from " + TypeBounds::getTypeName(sourceType) + 
+                               " to " + TypeBounds::getTypeName(targetType));
+    }
+    
+    llvm::Type* sourceLLVMType = value->getType();
+    llvm::Type* targetLLVMType = context.getLLVMType(targetType);
+    
+    if (!targetLLVMType) {
+        throw std::runtime_error("Unknown target type in cast");
+    }
+    
+    if (sourceLLVMType == targetLLVMType) {
+        return value;
+    }
+
+    if (sourceLLVMType->isIntegerTy() && targetLLVMType->isIntegerTy()) {
+        unsigned sourceBits = sourceLLVMType->getIntegerBitWidth();
+        unsigned targetBits = targetLLVMType->getIntegerBitWidth();
+        
+        if (sourceBits < targetBits) {
+            bool isUnsigned = TypeBounds::isUnsignedType(targetType);
+            if (isUnsigned) {
+                return builder.CreateZExt(value, targetLLVMType);
+            } else {
+                return builder.CreateSExt(value, targetLLVMType);
+            }
+        } else if (sourceBits > targetBits) {
+            return builder.CreateTrunc(value, targetLLVMType);
+        }
+    }
+
+    if (sourceLLVMType->isFPOrFPVectorTy() && targetLLVMType->isFPOrFPVectorTy()) {
+        if (sourceLLVMType->isFloatTy() && targetLLVMType->isDoubleTy()) {
+            return builder.CreateFPExt(value, targetLLVMType);
+        } else if (sourceLLVMType->isDoubleTy() && targetLLVMType->isFloatTy()) {
+            return builder.CreateFPTrunc(value, targetLLVMType);
+        }
+    }
+    
+    if (sourceLLVMType->isIntegerTy() && targetLLVMType->isFPOrFPVectorTy()) {
+        bool isUnsigned = TypeBounds::isUnsignedType(sourceType);
+        if (isUnsigned) {
+            return builder.CreateUIToFP(value, targetLLVMType);
+        } else {
+            return builder.CreateSIToFP(value, targetLLVMType);
+        }
+    }
+    
+    if (sourceLLVMType->isFPOrFPVectorTy() && targetLLVMType->isIntegerTy()) {
+        bool isUnsigned = TypeBounds::isUnsignedType(targetType);
+        if (isUnsigned) {
+            return builder.CreateFPToUI(value, targetLLVMType);
+        } else {
+            return builder.CreateFPToSI(value, targetLLVMType);
+        }
+    }
+    
+    if (sourceLLVMType->isIntegerTy(1) && targetLLVMType->isIntegerTy()) {
+        return builder.CreateZExt(value, targetLLVMType);
+    }
+    
+    if (sourceLLVMType->isIntegerTy() && targetLLVMType->isIntegerTy(1)) {
+        return builder.CreateICmpNE(value, ConstantInt::get(sourceLLVMType, 0));
+    }
+    
+    if (targetType == VarType::STRING) {
+        return convertToString(context, value);
+    }
+    
+    if (sourceLLVMType->isPointerTy() && targetType != VarType::STRING) {
+        throw std::runtime_error("Casting from string to non-string types not yet implemented");
+    }
+    
+    throw std::runtime_error("Unsupported cast operation from " + 
+                           TypeBounds::getTypeName(sourceType) + " to " + 
+                           TypeBounds::getTypeName(targetType));
 }
