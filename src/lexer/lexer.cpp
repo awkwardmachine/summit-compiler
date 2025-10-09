@@ -11,6 +11,7 @@ static unordered_map<string, TokenType> keywords = {
     {"bool", TokenType::BOOL},
     {"true", TokenType::TRUE},
     {"false", TokenType::FALSE},
+    {"as", TokenType::AS},
     {"int4", TokenType::INT4},
     {"int8", TokenType::INT8},
     {"int12", TokenType::INT12},
@@ -216,15 +217,22 @@ Token Lexer::readIdentifier() {
 Token Lexer::readBuiltin() {
     string builtin;
     size_t startLine = line, startCol = column;
-    
+
     advance();
     
+    if (!isalpha(peek()) && peek() != '_') {
+        throw runtime_error("Expected identifier after '@'");
+    }
+
     while (isalnum(peek()) || peek() == '_') {
         builtin += advance();
     }
-    
+
+    builtin = "@" + builtin;
+
     return Token(TokenType::BUILTIN, builtin, startLine, startCol);
 }
+
 
 vector<Token> Lexer::tokenize() {
     vector<Token> tokens;

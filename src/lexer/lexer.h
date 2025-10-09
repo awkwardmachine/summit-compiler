@@ -6,6 +6,7 @@ enum class TokenType {
     // Keywords
     VAR,
     CONST,
+    AS,
     INT8,
     INT16,
     INT32,

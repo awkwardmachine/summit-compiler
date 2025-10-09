@@ -43,7 +43,18 @@ void Parser::errorAt(const Token& tok, const string& msg) {
 }
 
 unique_ptr<Expr> Parser::parseExpression() {
-    return parseBinaryExpression(0);
+    return parseCastExpression();
+}
+
+unique_ptr<Expr> Parser::parseCastExpression() {
+    auto expr = parseBinaryExpression(0);
+    
+    if (match(TokenType::AS)) {
+        VarType targetType = parseType();
+        return make_unique<CastExpr>(move(expr), targetType);
+    }
+    
+    return expr;
 }
 
 AST::VarType Parser::parseType() {
@@ -79,24 +90,59 @@ unique_ptr<Expr> Parser::parseExpressionFromString(const string& exprStr) {
     return tempParser.parseExpression();
 }
 
-unique_ptr<Expr> Parser::parseAtom() {
+unique_ptr<Expr> Parser::parsePrimary() {
     const Token& tok = peek();
-    
-    if (match(TokenType::NUMBER)) return make_unique<NumberExpr>(tokens[current - 1].value);
+
+    if (match(TokenType::NUMBER)) 
+        return make_unique<NumberExpr>(tokens[current - 1].value);
+
     if (match(TokenType::FLOAT_LITERAL)) {
         string floatStr = tokens[current - 1].value;
         try {
             double value = std::stod(floatStr);
             return make_unique<FloatExpr>(value, VarType::FLOAT64);
-        } catch (const std::exception& e) {
+        } catch (const std::exception&) {
             error("Invalid float literal: " + floatStr);
         }
     }
-    if (match(TokenType::STRING_LITERAL)) return make_unique<StringExpr>(tokens[current - 1].value);
-    if (match(TokenType::BACKTICK_STRING)) return make_unique<StringExpr>(tokens[current - 1].value);
+
+    if (match(TokenType::STRING_LITERAL) || match(TokenType::BACKTICK_STRING)) 
+        return make_unique<StringExpr>(tokens[current - 1].value);
 
     if (match(TokenType::TRUE)) return make_unique<BooleanExpr>(true);
     if (match(TokenType::FALSE)) return make_unique<BooleanExpr>(false);
+
+    if (match(TokenType::BUILTIN)) {
+        string name;
+        
+        string builtinToken = tokens[current - 1].value;
+        if (builtinToken.length() > 1 && builtinToken[0] == '@') {
+            name = builtinToken.substr(1);
+        } else {
+            if (!check(TokenType::IDENTIFIER)) error("Expected identifier after '@'");
+            name = advance().value;
+        }
+
+        if (name == "print" || name == "println") {
+            if (!match(TokenType::LPAREN)) error("Expected '(' after @" + name);
+            vector<unique_ptr<Expr>> args;
+            if (!check(TokenType::RPAREN)) {
+                do { args.push_back(parseExpression()); } while(match(TokenType::COMMA));
+            }
+            if (!match(TokenType::RPAREN)) error("Expected ')' after arguments");
+            return make_unique<CallExpr>("@" + name, move(args));
+        }
+
+        else {
+            if (!match(TokenType::LPAREN)) error("Expected '(' after @" + name);
+            vector<unique_ptr<Expr>> args;
+            if (!check(TokenType::RPAREN)) {
+                do { args.push_back(parseExpression()); } while(match(TokenType::COMMA));
+            }
+            if (!match(TokenType::RPAREN)) error("Expected ')' after arguments");
+            return make_unique<CallExpr>("@" + name, move(args));
+        }
+    }
 
     if (match(TokenType::IDENTIFIER)) {
         string name = tokens[current - 1].value;
@@ -109,109 +155,17 @@ unique_ptr<Expr> Parser::parseAtom() {
         return make_unique<VariableExpr>(name);
     }
 
-    
-    if (match(TokenType::BUILTIN)) {
-        string name = tokens[current - 1].value;
-        
-        if (name == "print" || name == "println") {
-            if (!match(TokenType::LPAREN)) {
-                throw runtime_error("Expected '(' after builtin function");
-            }
-            
-            vector<unique_ptr<Expr>> args;
-            
-            if (!check(TokenType::RPAREN)) {
-                if (check(TokenType::BACKTICK_STRING)) {
-                    auto stringToken = advance();
-                    args.push_back(make_unique<StringExpr>(stringToken.value));
-                    
-                    auto expressions = extractExpressionsFromFormat(stringToken.value);
-                    for (auto& expr : expressions) {
-                        args.push_back(move(expr));
-                    }
-                } else {
-                    args.push_back(parseExpression());
-                }
-                
-                while (match(TokenType::COMMA)) {
-                    args.push_back(parseExpression());
-                }
-            }
-            
-            if (!match(TokenType::RPAREN)) {
-                throw runtime_error("Expected ')' after arguments");
-            }
-            return make_unique<CallExpr>("@" + name, move(args));
-        } else {
-            if (!match(TokenType::LPAREN)) {
-                throw runtime_error("Expected '(' after builtin function");
-            }
-            
-            vector<unique_ptr<Expr>> args;
-            if (!check(TokenType::RPAREN)) {
-                do {
-                    args.push_back(parseExpression());
-                } while (match(TokenType::COMMA));
-            }
-            if (!match(TokenType::RPAREN)) {
-                throw runtime_error("Expected ')' after arguments");
-            }
-            return make_unique<CallExpr>("@" + name, move(args));
-        }
-    }
-
     if (match(TokenType::LPAREN)) {
         auto expr = parseExpression();
         if (!match(TokenType::RPAREN)) error("Expected ')' after expression");
         return expr;
     }
 
-    string errorMsg = "Expected expression, but found: " + tok.value;
-    error(errorMsg);
+    error("Expected expression, but found: " + tok.value);
     return nullptr;
 }
 
-unique_ptr<Expr> Parser::parsePrimary() {
-    auto expr = parseAtom();
-    
-    while (true) {
-        if (match(TokenType::DOT)) {
-            if (!match(TokenType::IDENTIFIER)) {
-                error("Expected method name after '.'");
-            }
-            
-            string methodName = tokens[current - 1].value;
-            
-            if (methodName == "cast_to") {
-                if (!match(TokenType::LESS)) {
-                    error("Expected '<' after 'cast_to'");
-                }
-                
-                VarType targetType = parseType();
-                
-                if (!match(TokenType::GREATER)) {
-                    error("Expected '>' after type in cast_to");
-                }
-                
-                if (!match(TokenType::LPAREN)) {
-                    error("Expected '(' after cast_to<type>");
-                }
-                
-                if (!match(TokenType::RPAREN)) {
-                    error("Expected ')' in cast_to");
-                }
-                
-                expr = make_unique<CastExpr>(move(expr), targetType);
-            } else {
-                error("Unknown method: " + methodName);
-            }
-        } else {
-            break;
-        }
-    }
-    
-    return expr;
-}
+
 
 vector<unique_ptr<Expr>> Parser::extractExpressionsFromFormat(const string& formatStr) {
     vector<unique_ptr<Expr>> expressions;
