@@ -26,9 +26,7 @@ string getBaseFilename(const string& filename) {
 }
 
 bool compileToExecutable(const string& irFilename, const string& outputFilename) {
-    // Remove the redirection to see clang errors
-    string command = "clang-18 -w " + irFilename + " -o " + outputFilename; // removed " >/dev/null 2>&1"
-    cout << "Running: " << command << endl;
+    string command = "clang-18 -w " + irFilename + " -o " + outputFilename;
     int result = system(command.c_str());
     return result == 0;
 }
@@ -50,36 +48,22 @@ int main(int argc, char* argv[]) {
     string executableName = baseName;
     
     try {
-        cout << "Reading source file: " << inputFilename << endl;
         string source = readFile(inputFilename);
         
-        cout << "Lexing..." << endl;
         Lexer lexer(source);
         auto tokens = lexer.tokenize();
         
-        cout << "Found " << tokens.size() << " tokens" << endl;
-        
-        cout << "Parsing..." << endl;
-        Parser parser(move(tokens));
-        auto program = parser.parse();
-        
-        cout << "Parsed " << program->getStatements().size() << " statements" << endl;
-        
-        cout << "Generating LLVM IR..." << endl;
-        CodeGen codegen;
-        program->codegen(codegen);
+        Parser parser(move(tokens), source);
+        auto ast = parser.parse();
 
-        cout << "Writing IR to: " << irFilename << endl;
-        // codegen.printIR();
+        CodeGen codegen;
+        ast->codegen(codegen);
+
         codegen.printIRToFile(irFilename);
 
-        cout << "Compiling to executable..." << endl;
         if (compileToExecutable(irFilename, executableName)) {
             cleanupFiles(irFilename);
-            cout << "Successfully created: " << executableName << endl;
         } else {
-            cerr << "Compilation failed - LLVM IR generation succeeded but clang failed to create executable" << endl;
-            cerr << "The intermediate file " << irFilename << " has been preserved for debugging" << endl;
             return 1;
         }
         

@@ -8,7 +8,6 @@
 #include <llvm/IR/Module.h>
 #include "ast/ast_types.h"
 
-// Forward declarations instead of including ast.h
 namespace AST {
     enum class VarType;
     class NumberExpr;

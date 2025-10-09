@@ -1,0 +1,13 @@
+// Arithmetic example
+var a: int8 = 7;
+var b: int8 = 3;
+
+/*
+    Calculate sum and product of a and b
+    and print the results
+*/
+var sum: int8 = a + b;
+var product: int8 = a * b;
+
+@println(`Sum of {a} and {b} is {sum}`);
+@println(`Product of {a} and {b} is {product}`);

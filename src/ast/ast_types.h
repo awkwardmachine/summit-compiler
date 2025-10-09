@@ -6,6 +6,7 @@ namespace AST {
         INT16,
         INT32,
         INT64,
+        UINT0,
         STRING,
         VOID
     };

@@ -1,5 +1,0 @@
-var x: Int64 = 9223372036854775807;
-const str: String = "Hello, world!";
-
-@println(str);
-@println(x);

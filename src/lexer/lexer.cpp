@@ -8,11 +8,12 @@ using namespace std;
 static unordered_map<string, TokenType> keywords = {
     {"var", TokenType::VAR},
     {"const", TokenType::CONST},
-    {"Int8", TokenType::INT8},
-    {"Int16", TokenType::INT16},
-    {"Int32", TokenType::INT32},
-    {"Int64", TokenType::INT64},
-    {"String", TokenType::STRING}
+    {"int8", TokenType::INT8},
+    {"int16", TokenType::INT16},
+    {"int32", TokenType::INT32},
+    {"int64", TokenType::INT64},
+    {"uint0", TokenType::UINT0},
+    {"str", TokenType::STRING}
 };
 
 Lexer::Lexer(const string& input) 
@@ -38,6 +39,33 @@ char Lexer::advance() {
 void Lexer::skipWhitespace() {
     while (isspace(peek())) {
         advance();
+    }
+}
+
+void Lexer::skipComment() {
+    if (peek() == '/') {
+        advance();
+        if (peek() == '/') {
+            while (peek() != '\n' && peek() != '\0') {
+                advance();
+            }
+        } else if (peek() == '*') {
+            advance();
+            while (true) {
+                if (peek() == '\0') break;
+                if (peek() == '*') {
+                    advance();
+                    if (peek() == '/') {
+                        advance();
+                        break;
+                    }
+                } else {
+                    advance();
+                }
+            }
+        } else {
+            position--;
+        }
     }
 }
 
@@ -82,6 +110,38 @@ Token Lexer::readString() {
     return Token(TokenType::STRING_LITERAL, str, startLine, startCol);
 }
 
+Token Lexer::readBacktickString() {
+    string str;
+    size_t startLine = line, startCol = column;
+    
+    advance();
+    
+    while (peek() != '`' && peek() != '\0') {
+        if (peek() == '\\') {
+            advance();
+            switch (peek()) {
+                case 'n': str += '\n'; break;
+                case 't': str += '\t'; break;
+                case '\\': str += '\\'; break;
+                case '`': str += '`'; break;
+                case '{': str += '{'; break;
+                case '}': str += '}'; break;
+                default: str += '\\'; str += peek(); break;
+            }
+            advance();
+        } else {
+            str += advance();
+        }
+    }
+    
+    if (peek() != '`') {
+        throw runtime_error("Unterminated backtick string literal");
+    }
+    advance();
+    
+    return Token(TokenType::BACKTICK_STRING, str, startLine, startCol);
+}
+
 Token Lexer::readIdentifier() {
     string ident;
     size_t startLine = line, startCol = column;
@@ -116,7 +176,15 @@ vector<Token> Lexer::tokenize() {
     
     while (position < input.length()) {
         skipWhitespace();
-        
+
+        if (peek() == '/') {
+            char nextChar = input[position + 1];
+            if (nextChar == '/' || nextChar == '*') {
+                skipComment();
+                continue;
+            }
+        }
+
         char c = peek();
         if (c == '\0') break;
         
@@ -126,6 +194,8 @@ vector<Token> Lexer::tokenize() {
             tokens.push_back(readNumber());
         } else if (c == '"') {
             tokens.push_back(readString());
+        } else if (c == '`') {
+            tokens.push_back(readBacktickString());
         } else if (isalpha(c) || c == '_') {
             tokens.push_back(readIdentifier());
         } else if (c == '@') {
@@ -170,6 +240,14 @@ vector<Token> Lexer::tokenize() {
                     break;
                 case ',':
                     tokens.push_back(Token(TokenType::COMMA, ",", currentLine, currentCol));
+                    advance();
+                    break;
+                case '{':
+                    tokens.push_back(Token(TokenType::LBRACE, "{", currentLine, currentCol));
+                    advance();
+                    break;
+                case '}':
+                    tokens.push_back(Token(TokenType::RBRACE, "}", currentLine, currentCol));
                     advance();
                     break;
                 default:

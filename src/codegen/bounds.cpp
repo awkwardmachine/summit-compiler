@@ -13,10 +13,13 @@ bool TypeBounds::checkBounds(VarType type, const BigInt& value) {
             return value >= BigInt::MIN_INT32 && value <= BigInt::MAX_INT32;
         case VarType::INT64:
             return value >= BigInt::MIN_INT64 && value <= BigInt::MAX_INT64;
+        case VarType::UINT0:
+            return value == BigInt("0");
         default:
             return false;
     }
 }
+
 
 std::string TypeBounds::getTypeRange(VarType type) {
     switch (type) {
@@ -28,10 +31,13 @@ std::string TypeBounds::getTypeRange(VarType type) {
             return BigInt::MIN_INT32.toString() + " to " + BigInt::MAX_INT32.toString();
         case VarType::INT64:
             return BigInt::MIN_INT64.toString() + " to " + BigInt::MAX_INT64.toString();
+        case VarType::UINT0:
+            return "0 to 0";
         default:
             return "unknown range";
     }
 }
+
 
 std::string TypeBounds::getTypeName(VarType type) {
     switch (type) {
@@ -39,6 +45,7 @@ std::string TypeBounds::getTypeName(VarType type) {
         case VarType::INT16: return "int16";
         case VarType::INT32: return "int32";
         case VarType::INT64: return "int64";
+        case VarType::UINT0: return "uint0";
         case VarType::VOID: return "void";
         default: return "unknown";
     }

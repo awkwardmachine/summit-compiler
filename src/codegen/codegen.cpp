@@ -33,6 +33,8 @@ llvm::Type* CodeGen::getLLVMType(AST::VarType type) {
             return Type::getInt64Ty(*llvmContext);
         case AST::VarType::STRING:
             return llvm::PointerType::get(Type::getInt8Ty(*llvmContext), 0);
+        case AST::VarType::UINT0:
+            return Type::getInt1Ty(*llvmContext);
         case AST::VarType::VOID:
             return Type::getVoidTy(*llvmContext);
         default:

@@ -143,6 +143,9 @@ public:
     static BigInt MAX_INT32;
     static BigInt MIN_INT64;
     static BigInt MAX_INT64;
+    static BigInt MIN_UINT0;
+    static BigInt MAX_UINT0;
+
     
 private:
     static BigInt createFromInt64(int64_t val) {

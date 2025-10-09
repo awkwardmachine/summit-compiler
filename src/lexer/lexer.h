@@ -10,6 +10,7 @@ enum class TokenType {
     INT16,
     INT32,
     INT64,
+    UINT0,
     STRING,
     
     // Literals
@@ -31,6 +32,9 @@ enum class TokenType {
     LPAREN,
     RPAREN,
     COMMA,
+    BACKTICK_STRING,  // For `format string with {}`
+    LBRACE,           // {
+    RBRACE,           // }
     
     // Special tokens
     END_OF_FILE,
@@ -56,10 +60,12 @@ class Lexer {
     char peek();
     char advance();
     void skipWhitespace();
+    void skipComment();
     Token readNumber();
     Token readString();
     Token readIdentifier();
     Token readBuiltin();
+    Token readBacktickString();
     
 public:
     Lexer(const std::string& input);

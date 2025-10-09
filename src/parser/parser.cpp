@@ -1,75 +1,121 @@
 #include "parser.h"
 #include <stdexcept>
+#include <sstream>
+#include <vector>
 
 using namespace std;
 using namespace AST;
 
-Parser::Parser(vector<Token> tokens) 
-    : tokens(tokens), current(0) {}
+Parser::Parser(vector<Token> tokens, const string& source)
+    : tokens(tokens), current(0), source(source) {}
 
-const Token& Parser::peek() {
-    return tokens[current];
-}
+const Token& Parser::peek() { return tokens[current]; }
+const Token& Parser::advance() { if (!isAtEnd()) current++; return tokens[current - 1]; }
+bool Parser::match(TokenType type) { if (check(type)) { advance(); return true; } return false; }
+bool Parser::check(TokenType type) { return !isAtEnd() && peek().type == type; }
+bool Parser::checkNext(TokenType type) { return current + 1 < tokens.size() && tokens[current + 1].type == type; }
+bool Parser::isAtEnd() { return peek().type == TokenType::END_OF_FILE; }
 
-const Token& Parser::advance() {
-    if (!isAtEnd()) current++;
-    return tokens[current - 1];
-}
-
-bool Parser::match(TokenType type) {
-    if (check(type)) {
-        advance();
-        return true;
+string Parser::getSourceLine(size_t line) {
+    istringstream iss(source);
+    string currentLine;
+    size_t lineNum = 1;
+    
+    while (getline(iss, currentLine)) {
+        if (lineNum == line) {
+            return currentLine;
+        }
+        lineNum++;
     }
-    return false;
+    
+    return "";
 }
 
-bool Parser::check(TokenType type) {
-    if (isAtEnd()) return false;
-    return peek().type == type;
+void Parser::error(const string& msg) {
+    const Token& tok = peek();
+    string sourceLine = getSourceLine(tok.line);
+    throw SyntaxError(msg, tok.line, tok.column, sourceLine);
 }
 
-bool Parser::checkNext(TokenType type) {
-    if (current + 1 >= tokens.size()) return false;
-    return tokens[current + 1].type == type;
+void Parser::errorAt(const Token& tok, const string& msg) {
+    string sourceLine = getSourceLine(tok.line);
+    throw SyntaxError(msg, tok.line, tok.column, sourceLine);
 }
 
-bool Parser::isAtEnd() {
-    return peek().type == TokenType::END_OF_FILE;
+unique_ptr<Expr> Parser::parseExpression() {
+    return parseBinaryExpression(0);
 }
 
-VarType Parser::parseType() {
-    if (match(TokenType::INT8)) {
-        return VarType::INT8;
-    } else if (match(TokenType::INT16)) {
-        return VarType::INT16;
-    } else if (match(TokenType::INT32)) {
-        return VarType::INT32;
-    } else if (match(TokenType::INT64)) {
-        return VarType::INT64;
-    } else if (match(TokenType::STRING)) {
-        return VarType::STRING;
-    }
-    throw runtime_error("Expected type");
+AST::VarType Parser::parseType() {
+    if (match(TokenType::INT8)) return VarType::INT8;
+    if (match(TokenType::INT16)) return VarType::INT16;
+    if (match(TokenType::INT32)) return VarType::INT32;
+    if (match(TokenType::INT64)) return VarType::INT64;
+    if (match(TokenType::UINT0)) return VarType::UINT0;
+    if (match(TokenType::STRING)) return VarType::STRING;
+    error("Expected type");
+    return VarType::INT32;
+}
+
+unique_ptr<Expr> Parser::parseExpressionFromString(const string& exprStr) {
+    Lexer tempLexer(exprStr);
+    auto tempTokens = tempLexer.tokenize();
+    Parser tempParser(tempTokens, exprStr);
+    return tempParser.parseExpression();
 }
 
 unique_ptr<Expr> Parser::parsePrimary() {
-    if (match(TokenType::NUMBER)) {
-        try {
-            return make_unique<NumberExpr>(tokens[current - 1].value);
-        } catch (const std::runtime_error& e) {
-            throw runtime_error("Invalid number format: " + tokens[current - 1].value);
-        }
-    }
+    const Token& tok = peek();
     
-    if (match(TokenType::STRING_LITERAL)) {
-        return make_unique<StringExpr>(tokens[current - 1].value);
-    }
-    
+    if (match(TokenType::NUMBER)) return make_unique<NumberExpr>(tokens[current - 1].value);
+    if (match(TokenType::STRING_LITERAL)) return make_unique<StringExpr>(tokens[current - 1].value);
+    if (match(TokenType::BACKTICK_STRING)) return make_unique<StringExpr>(tokens[current - 1].value);
+
     if (match(TokenType::IDENTIFIER)) {
         string name = tokens[current - 1].value;
-        
         if (match(TokenType::LPAREN)) {
+            vector<unique_ptr<Expr>> args;
+            if (!check(TokenType::RPAREN)) do { args.push_back(parseExpression()); } while(match(TokenType::COMMA));
+            if (!match(TokenType::RPAREN)) error("Expected ')' after function arguments");
+            return make_unique<CallExpr>(name, move(args));
+        }
+        return make_unique<VariableExpr>(name);
+    }
+
+    
+    if (match(TokenType::BUILTIN)) {
+        string name = tokens[current - 1].value;
+        
+        if (name == "print" || name == "println") {
+            if (!match(TokenType::LPAREN)) {
+                throw runtime_error("Expected '(' after builtin function");
+            }
+            
+            vector<unique_ptr<Expr>> args;
+            
+            if (check(TokenType::STRING_LITERAL) || check(TokenType::BACKTICK_STRING)) {
+                auto stringToken = advance();
+                args.push_back(make_unique<StringExpr>(stringToken.value));
+                
+                if (stringToken.type == TokenType::BACKTICK_STRING) {
+                    auto expressions = extractExpressionsFromFormat(stringToken.value);
+                    for (auto& expr : expressions) {
+                        args.push_back(move(expr));
+                    }
+                }
+            } else {
+                error("First argument to print/println must be a string");
+            }
+            
+            if (!match(TokenType::RPAREN)) {
+                throw runtime_error("Expected ')' after arguments");
+            }
+            return make_unique<CallExpr>("@" + name, move(args));
+        } else {
+            if (!match(TokenType::LPAREN)) {
+                throw runtime_error("Expected '(' after builtin function");
+            }
+            
             vector<unique_ptr<Expr>> args;
             if (!check(TokenType::RPAREN)) {
                 do {
@@ -79,148 +125,110 @@ unique_ptr<Expr> Parser::parsePrimary() {
             if (!match(TokenType::RPAREN)) {
                 throw runtime_error("Expected ')' after arguments");
             }
-            return make_unique<CallExpr>(name, move(args));
+            return make_unique<CallExpr>("@" + name, move(args));
         }
-        
-        return make_unique<VariableExpr>(name);
     }
-    
-    if (match(TokenType::BUILTIN)) {
-        string name = tokens[current - 1].value;
-        
-        if (!match(TokenType::LPAREN)) {
-            throw runtime_error("Expected '(' after builtin function");
-        }
-        
-        vector<unique_ptr<Expr>> args;
-        if (!check(TokenType::RPAREN)) {
-            do {
-                args.push_back(parseExpression());
-            } while (match(TokenType::COMMA));
-        }
-        if (!match(TokenType::RPAREN)) {
-            throw runtime_error("Expected ')' after arguments");
-        }
-        return make_unique<CallExpr>("@" + name, move(args));
-    }
-    
+
     if (match(TokenType::LPAREN)) {
         auto expr = parseExpression();
-        if (!match(TokenType::RPAREN)) {
-            throw runtime_error("Expected ')' after expression");
-        }
+        if (!match(TokenType::RPAREN)) error("Expected ')' after expression");
         return expr;
     }
-    
-    throw runtime_error("Expected expression");
+
+    string errorMsg = "Expected expression, but found: " + tok.value;
+    error(errorMsg);
+    return nullptr;
 }
 
-unique_ptr<Expr> Parser::parseExpression() {
-    return parseBinaryExpression(0);
+vector<unique_ptr<Expr>> Parser::extractExpressionsFromFormat(const string& formatStr) {
+    vector<unique_ptr<Expr>> expressions;
+    
+    size_t pos = 0;
+    while ((pos = formatStr.find('{', pos)) != std::string::npos) {
+        size_t endPos = formatStr.find('}', pos);
+        if (endPos == std::string::npos) {
+            throw std::runtime_error("Unclosed '{' in format string");
+        }
+        
+        string exprStr = formatStr.substr(pos + 1, endPos - pos - 1);
+        
+        try {
+            auto expr = parseExpressionFromString(exprStr);
+            expressions.push_back(move(expr));
+        } catch (const exception& e) {
+            throw runtime_error("Invalid expression in format string: " + exprStr + " - " + e.what());
+        }
+        
+        pos = endPos + 1;
+    }
+    
+    return expressions;
 }
 
 unique_ptr<Expr> Parser::parseBinaryExpression(int minPrecedence) {
     auto left = parsePrimary();
-    
     while (true) {
         BinaryOp op;
         int precedence = 0;
         
-        if (match(TokenType::PLUS)) {
-            op = BinaryOp::ADD;
-            precedence = 1;
-        } else if (match(TokenType::MINUS)) {
-            op = BinaryOp::SUBTRACT;
-            precedence = 1;
-        } else if (match(TokenType::STAR)) {
-            op = BinaryOp::MULTIPLY;
-            precedence = 2;
-        } else if (match(TokenType::SLASH)) {
-            op = BinaryOp::DIVIDE;
-            precedence = 2;
-        } else {
-            break;
-        }
+        if (check(TokenType::PLUS)) { op = BinaryOp::ADD; precedence = 1; }
+        else if (check(TokenType::MINUS)) { op = BinaryOp::SUBTRACT; precedence = 1; }
+        else if (check(TokenType::STAR)) { op = BinaryOp::MULTIPLY; precedence = 2; }
+        else if (check(TokenType::SLASH)) { op = BinaryOp::DIVIDE; precedence = 2; }
+        else break;
+
+        if (precedence < minPrecedence) break;
         
-        if (precedence < minPrecedence) {
-            break;
-        }
-        
+        advance();
         auto right = parseBinaryExpression(precedence + 1);
         left = make_unique<BinaryExpr>(op, move(left), move(right));
     }
-    
     return left;
 }
 
 unique_ptr<Stmt> Parser::parseVariableDeclaration() {
     bool isConst = match(TokenType::CONST);
-    if (!isConst && !match(TokenType::VAR)) {
-        throw runtime_error("Expected 'var' or 'const'");
-    }
-    
-    if (!match(TokenType::IDENTIFIER)) {
-        throw runtime_error("Expected variable name");
-    }
+    if (!isConst && !match(TokenType::VAR)) error("Expected 'var' or 'const'");
+    if (!match(TokenType::IDENTIFIER)) error("Expected variable name");
     string name = tokens[current - 1].value;
-    
-    if (!match(TokenType::COLON)) {
-        throw runtime_error("Expected ':' after variable name");
-    }
-    
+    if (!match(TokenType::COLON)) error("Expected ':' after variable name");
     VarType type = parseType();
-    
     unique_ptr<Expr> value = nullptr;
-    if (match(TokenType::EQUALS)) {
-        value = parseExpression();
-    }
+    if (match(TokenType::EQUALS)) value = parseExpression();
     
+    const Token& lastToken = tokens[current - 1];
     if (!match(TokenType::SEMICOLON)) {
-        throw runtime_error("Expected ';' after variable declaration");
+        errorAt(lastToken, "Expected ';' after variable declaration");
     }
-    
     return make_unique<VariableDecl>(name, type, isConst, move(value));
 }
 
 unique_ptr<Stmt> Parser::parseAssignment() {
     string name = tokens[current - 1].value;
-    
-    if (!match(TokenType::EQUALS)) {
-        throw runtime_error("Expected '=' after variable name");
-    }
-    
+    if (!match(TokenType::EQUALS)) error("Expected '=' after variable name");
     auto value = parseExpression();
     
+    const Token& lastToken = tokens[current - 1];
     if (!match(TokenType::SEMICOLON)) {
-        throw runtime_error("Expected ';' after assignment");
+        errorAt(lastToken, "Expected ';' after assignment");
     }
-    
     return make_unique<AssignmentStmt>(name, move(value));
 }
 
 unique_ptr<Stmt> Parser::parseStatement() {
-    if (check(TokenType::VAR) || check(TokenType::CONST)) {
-        return parseVariableDeclaration();
-    }
-    
-    if (check(TokenType::IDENTIFIER) && checkNext(TokenType::EQUALS)) {
-        advance();
-        return parseAssignment();
-    }
-    
+    if (check(TokenType::VAR) || check(TokenType::CONST)) return parseVariableDeclaration();
+    if (check(TokenType::IDENTIFIER) && checkNext(TokenType::EQUALS)) { advance(); return parseAssignment(); }
     auto expr = parseExpression();
+    
+    const Token& lastToken = tokens[current - 1];
     if (!match(TokenType::SEMICOLON)) {
-        throw runtime_error("Expected ';' after expression");
+        errorAt(lastToken, "Expected ';' after expression");
     }
     return make_unique<ExprStmt>(move(expr));
 }
 
 unique_ptr<Program> Parser::parse() {
     auto program = make_unique<Program>();
-    
-    while (!isAtEnd()) {
-        program->addStatement(parseStatement());
-    }
-    
+    while (!isAtEnd()) program->addStatement(parseStatement());
     return program;
 }
