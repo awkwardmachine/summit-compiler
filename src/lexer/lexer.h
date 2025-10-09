@@ -11,6 +11,10 @@ enum class TokenType {
     INT32,
     INT64,
     UINT0,
+    UINT8,
+    UINT16,
+    UINT32,
+    UINT64,
     STRING,
     
     // Literals
@@ -32,9 +36,9 @@ enum class TokenType {
     LPAREN,
     RPAREN,
     COMMA,
-    BACKTICK_STRING,  // For `format string with {}`
-    LBRACE,           // {
-    RBRACE,           // }
+    BACKTICK_STRING,
+    LBRACE,
+    RBRACE,
     
     // Special tokens
     END_OF_FILE,

@@ -13,6 +13,10 @@ static unordered_map<string, TokenType> keywords = {
     {"int32", TokenType::INT32},
     {"int64", TokenType::INT64},
     {"uint0", TokenType::UINT0},
+    {"uint8", TokenType::UINT8},
+    {"uint16", TokenType::UINT16},
+    {"uint32", TokenType::UINT32},
+    {"uint64", TokenType::UINT64},
     {"str", TokenType::STRING}
 };
 

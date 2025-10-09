@@ -6,6 +6,9 @@
 #include <regex>
 #include <vector>
 #include <sstream>
+#include <cstdint>
+#include <climits>
+#include <limits>
 
 using namespace llvm;
 using namespace AST;
@@ -32,12 +35,28 @@ llvm::Value* ExpressionCodeGen::codegenNumber(CodeGen& context, NumberExpr& expr
     uint64_t absValue = 0;
     for (size_t i = startPos; i < strValue.length(); i++) {
         if (strValue[i] >= '0' && strValue[i] <= '9') {
+            if (absValue > (UINT64_MAX / 10)) {
+                throw std::runtime_error("Number literal too large: " + strValue + 
+                                       " exceeds maximum value of 18446744073709551615");
+            }
             absValue = absValue * 10 + (strValue[i] - '0');
         }
     }
 
-    int64_t int64Value = isNegative ? -static_cast<int64_t>(absValue) : static_cast<int64_t>(absValue);
-    return ConstantInt::get(context.getContext(), APInt(64, int64Value, true));
+    if (!isNegative) {
+        BigInt maxUint64("18446744073709551615");
+        if (value > maxUint64) {
+            throw std::runtime_error("Number literal too large: " + strValue + 
+                                   " exceeds maximum value of 18446744073709551615");
+        }
+    }
+
+    if (!isNegative && absValue > INT64_MAX) {
+        return ConstantInt::get(context.getContext(), APInt(64, absValue, false));
+    } else {
+        int64_t int64Value = isNegative ? -static_cast<int64_t>(absValue) : static_cast<int64_t>(absValue);
+        return ConstantInt::get(context.getContext(), APInt(64, int64Value, true));
+    }
 }
 
 llvm::Value* ExpressionCodeGen::codegenVariable(CodeGen& context, VariableExpr& expr) {
@@ -61,14 +80,28 @@ llvm::Value* ExpressionCodeGen::codegenVariable(CodeGen& context, VariableExpr& 
     }
 
     if (typeIt != variableTypes.end() && typeIt->second == AST::VarType::UINT0) {
-        return ConstantInt::get(Type::getInt1Ty(context.getContext()), 0);
+        return builder.CreateLoad(Type::getInt1Ty(context.getContext()), var, expr.getName().c_str());
+    }
+
+    bool isUnsigned = false;
+    if (typeIt != variableTypes.end()) {
+        auto varType = typeIt->second;
+        isUnsigned = (varType == AST::VarType::UINT8 || varType == AST::VarType::UINT16 || 
+                     varType == AST::VarType::UINT32 || varType == AST::VarType::UINT64);
     }
 
     llvm::Type* loadType = Type::getInt64Ty(context.getContext());
     if (typeIt != variableTypes.end()) {
         loadType = context.getLLVMType(typeIt->second);
     }
-    return builder.CreateLoad(loadType, var, expr.getName().c_str());
+    
+    llvm::Value* loadedValue = builder.CreateLoad(loadType, var, expr.getName().c_str());
+
+    if (isUnsigned && loadedValue->getType()->getIntegerBitWidth() < 64) {
+        loadedValue = builder.CreateZExt(loadedValue, Type::getInt64Ty(context.getContext()));
+    }
+    
+    return loadedValue;
 }
 
 llvm::Value* ExpressionCodeGen::codegenBinary(CodeGen& context, BinaryExpr& expr) {
@@ -101,7 +134,8 @@ llvm::Value* ExpressionCodeGen::codegenBinary(CodeGen& context, BinaryExpr& expr
         case BinaryOp::ADD: return builder.CreateAdd(lhs, rhs, "addtmp");
         case BinaryOp::SUBTRACT: return builder.CreateSub(lhs, rhs, "subtmp");
         case BinaryOp::MULTIPLY: return builder.CreateMul(lhs, rhs, "multmp");
-        case BinaryOp::DIVIDE: return builder.CreateSDiv(lhs, rhs, "divtmp");
+        case BinaryOp::DIVIDE: 
+            return builder.CreateSDiv(lhs, rhs, "divtmp");
         default: throw std::runtime_error("Unknown binary operator");
     }
 }
@@ -133,7 +167,6 @@ std::string buildFormatSpecifiers(const std::string& formatStr) {
     
     return formatSpecifiers;
 }
-
 llvm::Value* convertToString(CodeGen& context, llvm::Value* value) {
     auto& builder = context.getBuilder();
     auto& module = context.getModule();
@@ -142,7 +175,7 @@ llvm::Value* convertToString(CodeGen& context, llvm::Value* value) {
     if (value->getType()->isPointerTy()) {
         return value;
     }
-    
+
     auto mallocFunc = module.getFunction("malloc");
     if (!mallocFunc) {
         auto* i8Ptr = PointerType::get(Type::getInt8Ty(llvmContext), 0);
@@ -159,7 +192,7 @@ llvm::Value* convertToString(CodeGen& context, llvm::Value* value) {
         auto funcType = FunctionType::get(i32, paramTypes, true);
         sprintfFunc = Function::Create(funcType, Function::ExternalLinkage, "sprintf", &module);
     }
-    
+
     const int BUFFER_SIZE = 32;
     auto* buffer = builder.CreateCall(mallocFunc, {ConstantInt::get(builder.getInt64Ty(), BUFFER_SIZE)});
 
@@ -181,7 +214,13 @@ llvm::Value* convertToString(CodeGen& context, llvm::Value* value) {
         }
         builder.CreateCall(strcpyFunc, {buffer, boolStr});
     } else {
-        formatStr = builder.CreateGlobalStringPtr("%ld");
+        auto isLarge = builder.CreateICmpUGE(value, ConstantInt::get(value->getType(), 1ULL << 63));
+
+        auto signedFormatStr = builder.CreateGlobalStringPtr("%ld");
+        auto unsignedFormatStr = builder.CreateGlobalStringPtr("%lu");
+        
+        formatStr = builder.CreateSelect(isLarge, unsignedFormatStr, signedFormatStr);
+        
         std::vector<Value*> sprintfArgs = {buffer, formatStr, value};
         builder.CreateCall(sprintfFunc, sprintfArgs);
     }
@@ -192,68 +231,81 @@ llvm::Value* convertToString(CodeGen& context, llvm::Value* value) {
 llvm::Value* ExpressionCodeGen::codegenCall(CodeGen& context, CallExpr& expr) {
     auto& module = context.getModule();
     auto& builder = context.getBuilder();
-
+    
     if (expr.getCallee() == "@print" || expr.getCallee() == "@println") {
         if (expr.getArgs().size() < 1) {
             throw std::runtime_error("print/println expects at least one argument");
         }
-        
-        auto formatArg = expr.getArgs()[0]->codegen(context);
-        if (!formatArg->getType()->isPointerTy()) {
-            throw std::runtime_error("First argument to print/println must be a string");
-        }
-        
-        auto formatStrValue = dyn_cast<GlobalVariable>(formatArg);
-        if (!formatStrValue) {
-            throw std::runtime_error("Format string must be a string literal");
-        }
-        
-        auto formatStrConstant = dyn_cast<ConstantDataSequential>(formatStrValue->getInitializer());
-        if (!formatStrConstant) {
-            throw std::runtime_error("Format string must be a constant string");
-        }
-        
-        std::string formatStr = formatStrConstant->getAsString().drop_back().str();
         
         auto printfFunc = module.getFunction("printf");
         if (!printfFunc) {
             throw std::runtime_error("printf function not found");
         }
         
-        if (formatStr.find('{') != std::string::npos) {
-            auto formatSpecifiers = buildFormatSpecifiers(formatStr);
-            
-            if (expr.getCallee() == "@println") {
-                formatSpecifiers += "\n";
-            }
-            
-            std::vector<Value*> args;
-            
-            auto formatSpecifierStr = builder.CreateGlobalStringPtr(formatSpecifiers);
-            args.push_back(formatSpecifierStr);
+        auto firstArg = expr.getArgs()[0]->codegen(context);
 
-            for (size_t i = 1; i < expr.getArgs().size(); i++) {
-                auto argValue = expr.getArgs()[i]->codegen(context);
+        if (auto formatStrValue = dyn_cast<GlobalVariable>(firstArg)) {
+            if (auto formatStrConstant = dyn_cast<ConstantDataSequential>(formatStrValue->getInitializer())) {
+                std::string formatStr = formatStrConstant->getAsString().drop_back().str();
+                
+                if (formatStr.find('{') != std::string::npos) {
+                    auto formatSpecifiers = buildFormatSpecifiers(formatStr);
 
-                auto stringValue = convertToString(context, argValue);
-                args.push_back(stringValue);
+                    if (expr.getCallee() == "@println") {
+                        formatSpecifiers += "\n";
+                    }
+                    
+                    std::vector<Value*> args;
+                    
+                    auto formatSpecifierStr = builder.CreateGlobalStringPtr(formatSpecifiers);
+                    args.push_back(formatSpecifierStr);
+                    
+                    for (size_t i = 1; i < expr.getArgs().size(); i++) {
+                        auto argValue = expr.getArgs()[i]->codegen(context);
+                        auto stringValue = convertToString(context, argValue);
+                        args.push_back(stringValue);
+                    }
+                    
+                    return builder.CreateCall(printfFunc, args);
+                } else {
+                    std::vector<Value*> args;
+                    
+                    if (expr.getCallee() == "@println") {
+                        auto formatWithNewline = formatStr + "\n";
+                        auto formatStrPtr = builder.CreateGlobalStringPtr(formatWithNewline);
+                        args.push_back(formatStrPtr);
+                    } else {
+                        auto formatStrPtr = builder.CreateGlobalStringPtr(formatStr);
+                        args.push_back(formatStrPtr);
+                    }
+                    
+                    return builder.CreateCall(printfFunc, args);
+                }
             }
-            
-            return builder.CreateCall(printfFunc, args);
-        } else {
-            std::vector<Value*> args;
-            
-            if (expr.getCallee() == "@println") {
-                auto formatWithNewline = formatStr + "\n";
-                auto formatStrPtr = builder.CreateGlobalStringPtr(formatWithNewline);
-                args.push_back(formatStrPtr);
-            } else {
-                auto formatStrPtr = builder.CreateGlobalStringPtr(formatStr);
-                args.push_back(formatStrPtr);
-            }
-            
-            return builder.CreateCall(printfFunc, args);
         }
+        
+        std::vector<Value*> args;
+
+        std::string formatStr;
+        for (size_t i = 0; i < expr.getArgs().size(); i++) {
+            if (i > 0) formatStr += " ";
+            formatStr += "%s";
+        }
+
+        if (expr.getCallee() == "@println") {
+            formatStr += "\n";
+        }
+        
+        auto formatStrPtr = builder.CreateGlobalStringPtr(formatStr);
+        args.push_back(formatStrPtr);
+
+        for (size_t i = 0; i < expr.getArgs().size(); i++) {
+            auto argValue = expr.getArgs()[i]->codegen(context);
+            auto stringValue = convertToString(context, argValue);
+            args.push_back(stringValue);
+        }
+        
+        return builder.CreateCall(printfFunc, args);
     }
 
     auto func = module.getFunction(expr.getCallee());

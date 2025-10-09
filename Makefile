@@ -32,9 +32,6 @@ $(BIN_DIR):
 clean:
 	rm -rf $(BUILD_DIR)
 
-test: $(TARGET)
-	# Add your test commands here
-
 $(BUILD_DIR)/ast: | $(BUILD_DIR)
 	@mkdir -p $@
 

@@ -51,6 +51,10 @@ AST::VarType Parser::parseType() {
     if (match(TokenType::INT16)) return VarType::INT16;
     if (match(TokenType::INT32)) return VarType::INT32;
     if (match(TokenType::INT64)) return VarType::INT64;
+    if (match(TokenType::UINT8)) return VarType::UINT8;
+    if (match(TokenType::UINT16)) return VarType::UINT16;
+    if (match(TokenType::UINT32)) return VarType::UINT32;
+    if (match(TokenType::UINT64)) return VarType::UINT64;
     if (match(TokenType::UINT0)) return VarType::UINT0;
     if (match(TokenType::STRING)) return VarType::STRING;
     error("Expected type");
@@ -93,18 +97,22 @@ unique_ptr<Expr> Parser::parsePrimary() {
             
             vector<unique_ptr<Expr>> args;
             
-            if (check(TokenType::STRING_LITERAL) || check(TokenType::BACKTICK_STRING)) {
-                auto stringToken = advance();
-                args.push_back(make_unique<StringExpr>(stringToken.value));
-                
-                if (stringToken.type == TokenType::BACKTICK_STRING) {
+            if (!check(TokenType::RPAREN)) {
+                if (check(TokenType::BACKTICK_STRING)) {
+                    auto stringToken = advance();
+                    args.push_back(make_unique<StringExpr>(stringToken.value));
+                    
                     auto expressions = extractExpressionsFromFormat(stringToken.value);
                     for (auto& expr : expressions) {
                         args.push_back(move(expr));
                     }
+                } else {
+                    args.push_back(parseExpression());
                 }
-            } else {
-                error("First argument to print/println must be a string");
+                
+                while (match(TokenType::COMMA)) {
+                    args.push_back(parseExpression());
+                }
             }
             
             if (!match(TokenType::RPAREN)) {
