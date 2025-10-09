@@ -1,0 +1,185 @@
+#include "lexer/lexer.h"
+#include <cctype>
+#include <unordered_map>
+#include <stdexcept>
+
+using namespace std;
+
+static unordered_map<string, TokenType> keywords = {
+    {"var", TokenType::VAR},
+    {"const", TokenType::CONST},
+    {"Int8", TokenType::INT8},
+    {"Int16", TokenType::INT16},
+    {"Int32", TokenType::INT32},
+    {"Int64", TokenType::INT64},
+    {"String", TokenType::STRING}
+};
+
+Lexer::Lexer(const string& input) 
+    : input(input), position(0), line(1), column(1) {}
+
+char Lexer::peek() {
+    if (position >= input.length()) return '\0';
+    return input[position];
+}
+
+char Lexer::advance() {
+    if (position >= input.length()) return '\0';
+    char c = input[position++];
+    if (c == '\n') {
+        line++;
+        column = 1;
+    } else {
+        column++;
+    }
+    return c;
+}
+
+void Lexer::skipWhitespace() {
+    while (isspace(peek())) {
+        advance();
+    }
+}
+
+Token Lexer::readNumber() {
+    string number;
+    size_t startLine = line, startCol = column;
+    
+    while (isdigit(peek())) {
+        number += advance();
+    }
+    
+    return Token(TokenType::NUMBER, number, startLine, startCol);
+}
+
+Token Lexer::readString() {
+    string str;
+    size_t startLine = line, startCol = column;
+    
+    advance();
+    
+    while (peek() != '"' && peek() != '\0') {
+        if (peek() == '\\') {
+            advance();
+            switch (peek()) {
+                case 'n': str += '\n'; break;
+                case 't': str += '\t'; break;
+                case '\\': str += '\\'; break;
+                case '"': str += '"'; break;
+                default: str += '\\'; str += peek(); break;
+            }
+            advance();
+        } else {
+            str += advance();
+        }
+    }
+    
+    if (peek() != '"') {
+        throw runtime_error("Unterminated string literal");
+    }
+    advance();
+    
+    return Token(TokenType::STRING_LITERAL, str, startLine, startCol);
+}
+
+Token Lexer::readIdentifier() {
+    string ident;
+    size_t startLine = line, startCol = column;
+    
+    while (isalnum(peek()) || peek() == '_') {
+        ident += advance();
+    }
+    
+    auto it = keywords.find(ident);
+    if (it != keywords.end()) {
+        return Token(it->second, ident, startLine, startCol);
+    }
+    
+    return Token(TokenType::IDENTIFIER, ident, startLine, startCol);
+}
+
+Token Lexer::readBuiltin() {
+    string builtin;
+    size_t startLine = line, startCol = column;
+    
+    advance();
+    
+    while (isalnum(peek()) || peek() == '_') {
+        builtin += advance();
+    }
+    
+    return Token(TokenType::BUILTIN, builtin, startLine, startCol);
+}
+
+vector<Token> Lexer::tokenize() {
+    vector<Token> tokens;
+    
+    while (position < input.length()) {
+        skipWhitespace();
+        
+        char c = peek();
+        if (c == '\0') break;
+        
+        size_t currentLine = line, currentCol = column;
+        
+        if (isdigit(c)) {
+            tokens.push_back(readNumber());
+        } else if (c == '"') {
+            tokens.push_back(readString());
+        } else if (isalpha(c) || c == '_') {
+            tokens.push_back(readIdentifier());
+        } else if (c == '@') {
+            tokens.push_back(readBuiltin());
+        } else {
+            switch (c) {
+                case '=':
+                    tokens.push_back(Token(TokenType::EQUALS, "=", currentLine, currentCol));
+                    advance();
+                    break;
+                case '+':
+                    tokens.push_back(Token(TokenType::PLUS, "+", currentLine, currentCol));
+                    advance();
+                    break;
+                case '-':
+                    tokens.push_back(Token(TokenType::MINUS, "-", currentLine, currentCol));
+                    advance();
+                    break;
+                case '*':
+                    tokens.push_back(Token(TokenType::STAR, "*", currentLine, currentCol));
+                    advance();
+                    break;
+                case '/':
+                    tokens.push_back(Token(TokenType::SLASH, "/", currentLine, currentCol));
+                    advance();
+                    break;
+                case ':':
+                    tokens.push_back(Token(TokenType::COLON, ":", currentLine, currentCol));
+                    advance();
+                    break;
+                case ';':
+                    tokens.push_back(Token(TokenType::SEMICOLON, ";", currentLine, currentCol));
+                    advance();
+                    break;
+                case '(':
+                    tokens.push_back(Token(TokenType::LPAREN, "(", currentLine, currentCol));
+                    advance();
+                    break;
+                case ')':
+                    tokens.push_back(Token(TokenType::RPAREN, ")", currentLine, currentCol));
+                    advance();
+                    break;
+                case ',':
+                    tokens.push_back(Token(TokenType::COMMA, ",", currentLine, currentCol));
+                    advance();
+                    break;
+                default:
+                    tokens.push_back(Token(TokenType::UNKNOWN, string(1, c), currentLine, currentCol));
+                    advance();
+                    break;
+            }
+        }
+    }
+    
+    tokens.push_back(Token(TokenType::END_OF_FILE, "", line, column));
+    return tokens;
+}
