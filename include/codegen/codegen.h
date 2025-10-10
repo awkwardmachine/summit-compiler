@@ -26,6 +26,8 @@ namespace AST {
     class ExprStmt;
     class IfStmt;
     class BlockStmt;
+    class FunctionStmt;
+    class ReturnStmt;
     class Program;
 }
 
@@ -84,6 +86,8 @@ public:
     llvm::Value* codegen(AST::ExprStmt& stmt);
     llvm::Value* codegen(AST::IfStmt& stmt);
     llvm::Value* codegen(AST::BlockStmt& stmt);
+    llvm::Value* codegen(AST::FunctionStmt& stmt);
+    llvm::Value* codegen(AST::ReturnStmt& stmt);
     llvm::Value* codegen(AST::Program& program);
     
     /* Debugging and output methods */

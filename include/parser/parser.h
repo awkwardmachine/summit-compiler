@@ -25,6 +25,8 @@ private:
     std::unique_ptr<AST::Expr> parseCastExpression();
     std::unique_ptr<AST::Expr> parseUnaryExpression();
     std::unique_ptr<AST::Stmt> parseIfStatement();
+    std::unique_ptr<AST::Stmt> parseFunctionDeclaration();
+    std::unique_ptr<AST::Stmt> parseReturnStatement();
     std::unique_ptr<AST::Stmt> parseBlock();
     std::unique_ptr<AST::Stmt> parseElseIfChain();
 

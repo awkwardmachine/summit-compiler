@@ -9,7 +9,8 @@ unordered_map<string, TokenType> Lexer::keywords = {
     {"bool", TokenType::BOOL}, {"true", TokenType::TRUE}, {"false", TokenType::FALSE},
     {"if", TokenType::IF}, {"then", TokenType::THEN}, {"else", TokenType::ELSE},
     {"elseif", TokenType::ELSEIF}, {"end", TokenType::END}, {"and", TokenType::AND},
-    {"or", TokenType::OR}, {"not", TokenType::NOT},
+    {"or", TokenType::OR}, {"not", TokenType::NOT}, {"func", TokenType::FUNC},
+    {"ret", TokenType::RETURN},
     
     {"int4", TokenType::INT4}, {"int8", TokenType::INT8}, {"int12", TokenType::INT12},
     {"int16", TokenType::INT16}, {"int24", TokenType::INT24}, {"int32", TokenType::INT32},

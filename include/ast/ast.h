@@ -310,6 +310,58 @@ public:
     }
 };
 
+class FunctionStmt : public Stmt {
+    std::string name;
+    std::vector<std::pair<std::string, VarType>> parameters;
+    VarType returnType;
+    std::unique_ptr<BlockStmt> body;
+public:
+    FunctionStmt(const std::string& name, 
+                 std::vector<std::pair<std::string, VarType>> parameters,
+                 VarType returnType,
+                 std::unique_ptr<BlockStmt> body)
+        : name(name), parameters(std::move(parameters)), 
+          returnType(returnType), body(std::move(body)) {}
+    
+    llvm::Value* codegen(::CodeGen& context) override;
+    
+    const std::string& getName() const { return name; }
+    const std::vector<std::pair<std::string, VarType>>& getParameters() const { return parameters; }
+    VarType getReturnType() const { return returnType; }
+    const std::unique_ptr<BlockStmt>& getBody() const { return body; }
+    
+    std::string toString(int indent = 0) const override {
+        std::ostringstream oss;
+        oss << indentStr(indent) << "FunctionStmt: " << quoted(name) 
+            << " -> " << static_cast<int>(returnType) << "\n";
+        oss << indentStr(indent + 1) << "Parameters (" << parameters.size() << "):\n";
+        for (const auto& param : parameters) {
+            oss << indentStr(indent + 2) << quoted(param.first) 
+                << " : " << static_cast<int>(param.second) << "\n";
+        }
+        oss << indentStr(indent + 1) << "Body:\n";
+        oss << (body ? body->toString(indent + 2) : indentStr(indent + 2) + "null");
+        return oss.str();
+    }
+};
+
+class ReturnStmt : public Stmt {
+    std::unique_ptr<Expr> value;
+public:
+    ReturnStmt(std::unique_ptr<Expr> value = nullptr) : value(std::move(value)) {}
+    
+    llvm::Value* codegen(::CodeGen& context) override;
+    
+    const std::unique_ptr<Expr>& getValue() const { return value; }
+    
+    std::string toString(int indent = 0) const override {
+        std::ostringstream oss;
+        oss << indentStr(indent) << "ReturnStmt\n";
+        oss << (value ? value->toString(indent + 1) : indentStr(indent + 1) + "void");
+        return oss.str();
+    }
+};
+
 class UnaryExpr : public Expr {
     UnaryOp op;
     std::unique_ptr<Expr> operand;

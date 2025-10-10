@@ -4,9 +4,28 @@
 #include <llvm/IR/Verifier.h>
 #include <llvm/IR/BasicBlock.h>
 #include "codegen/bounds.h"
+#include "type_inference.h"
 
 using namespace llvm;
 using namespace AST;
+
+
+llvm::Constant* createDefaultValue(llvm::Type* type, VarType varType) {
+    if (type->isIntegerTy()) {
+        if (TypeBounds::isUnsignedType(varType)) {
+            return ConstantInt::get(type, 0, false);
+        } else {
+            return ConstantInt::get(type, 0, true);
+        }
+    } else if (type->isFloatTy()) {
+        return ConstantFP::get(type, 0.0f);
+    } else if (type->isDoubleTy()) {
+        return ConstantFP::get(type, 0.0);
+    } else if (type->isPointerTy()) {
+        return ConstantPointerNull::get(static_cast<llvm::PointerType*>(type));
+    }
+    return nullptr;
+}
 
 llvm::Value* StatementCodeGen::codegenVariableDecl(CodeGen& context, VariableDecl& decl) {
     if (decl.getType() == VarType::VOID) {
@@ -206,49 +225,218 @@ llvm::Value* StatementCodeGen::codegenAssignment(CodeGen& context, AssignmentStm
 llvm::Value* StatementCodeGen::codegenExprStmt(CodeGen& context, ExprStmt& stmt) {
     return stmt.getExpr()->codegen(context);
 }
-
 llvm::Value* StatementCodeGen::codegenProgram(CodeGen& context, Program& program) {
     auto& builder = context.getBuilder();
     auto& module = context.getModule();
     auto& llvmContext = context.getContext();
     
-    auto mainFuncType = llvm::FunctionType::get(
-        llvm::Type::getInt32Ty(llvmContext), 
-        false
-    );
-    auto mainFunc = llvm::Function::Create(
-        mainFuncType,
-        llvm::Function::ExternalLinkage,
-        "main",
-        &module
-    );
-    
-    auto entryBlock = llvm::BasicBlock::Create(llvmContext, "entry", mainFunc);
-    builder.SetInsertPoint(entryBlock);
-    
-    for (auto& stmt : program.getStatements()) {
-        stmt->codegen(context);
+    std::cout << "DEBUG: First pass - generating all functions" << std::endl;
+    for (size_t i = 0; i < program.getStatements().size(); i++) {
+        auto& stmt = program.getStatements()[i];
+        if (auto* funcStmt = dynamic_cast<FunctionStmt*>(stmt.get())) {
+            std::cout << "DEBUG: Generating function: " << funcStmt->getName() << std::endl;
+            funcStmt->codegen(context);
+        }
     }
     
-    builder.CreateRet(llvm::ConstantInt::get(llvmContext, llvm::APInt(32, 0)));
+    llvm::Function* userMainFunc = module.getFunction("main");
+    bool hasUserMain = (userMainFunc != nullptr);
     
-    if (llvm::verifyFunction(*mainFunc, &llvm::errs())) {
-        throw std::runtime_error("Generated function failed verification");
+    if (hasUserMain) {
+        std::cout << "DEBUG: Found user-defined main() function" << std::endl;
+        
+        auto returnType = userMainFunc->getReturnType();
+        bool isValidReturnType = returnType->isIntegerTy(32) || 
+                                 returnType->isVoidTy() || 
+                                 returnType->isIntegerTy(1);
+        
+        if (!isValidReturnType) {
+            throw std::runtime_error(
+                "main() function must return int32, void, or uint0"
+            );
+        }
+        
+        if (userMainFunc->arg_size() != 0) {
+            throw std::runtime_error(
+                "main() function should not take any parameters (got " + 
+                std::to_string(userMainFunc->arg_size()) + " parameters)"
+            );
+        }
+        
+        if (returnType->isVoidTy() || returnType->isIntegerTy(1)) {
+            if (returnType->isVoidTy()) {
+                std::cout << "DEBUG: main() returns void, creating wrapper" << std::endl;
+            } else {
+                std::cout << "DEBUG: main() returns uint0, creating wrapper" << std::endl;
+            }
+            
+            userMainFunc->setName("__user_main");
+
+            auto mainFuncType = llvm::FunctionType::get(
+                llvm::Type::getInt32Ty(llvmContext), 
+                false
+            );
+            auto wrapperMain = llvm::Function::Create(
+                mainFuncType,
+                llvm::Function::ExternalLinkage,
+                "main",
+                &module
+            );
+            
+            auto entryBlock = llvm::BasicBlock::Create(llvmContext, "entry", wrapperMain);
+            builder.SetInsertPoint(entryBlock);
+            
+            if (returnType->isVoidTy()) {
+                builder.CreateCall(userMainFunc, {});
+                builder.CreateRet(llvm::ConstantInt::get(llvmContext, llvm::APInt(32, 0)));
+            } else {
+                auto result = builder.CreateCall(userMainFunc, {});
+                auto extendedResult = builder.CreateZExt(result, llvm::Type::getInt32Ty(llvmContext));
+                builder.CreateRet(extendedResult);
+            }
+            
+            if (llvm::verifyFunction(*wrapperMain, &llvm::errs())) {
+                throw std::runtime_error("Wrapper main() function failed verification");
+            }
+            
+            return wrapperMain;
+        } else {
+            std::cout << "DEBUG: main() returns int32, using as-is" << std::endl;
+            return userMainFunc;
+        }
+    } else {
+        std::cout << "DEBUG: No user-defined main() found, generating auto-main" << std::endl;
+        
+        auto mainFuncType = llvm::FunctionType::get(
+            llvm::Type::getInt32Ty(llvmContext), 
+            false
+        );
+        auto mainFunc = llvm::Function::Create(
+            mainFuncType,
+            llvm::Function::ExternalLinkage,
+            "main",
+            &module
+        );
+        
+        auto entryBlock = llvm::BasicBlock::Create(llvmContext, "entry", mainFunc);
+        builder.SetInsertPoint(entryBlock);
+
+        for (size_t i = 0; i < program.getStatements().size(); i++) {
+            auto& stmt = program.getStatements()[i];
+
+            if (dynamic_cast<FunctionStmt*>(stmt.get())) {
+                continue;
+            }
+            
+            if (builder.GetInsertBlock()->getTerminator()) {
+                break;
+            }
+            
+            stmt->codegen(context);
+        }
+        
+        if (!builder.GetInsertBlock()->getTerminator()) {
+            builder.CreateRet(llvm::ConstantInt::get(llvmContext, llvm::APInt(32, 0)));
+        }
+        
+        if (llvm::verifyFunction(*mainFunc, &llvm::errs())) {
+            std::cerr << "Auto-generated main() failed verification. Generated IR:" << std::endl;
+            mainFunc->print(llvm::errs());
+            throw std::runtime_error("Auto-generated main() failed verification");
+        }
+        
+        return mainFunc;
     }
-    
-    return mainFunc;
 }
+
+llvm::Value* StatementCodeGen::codegenFunctionStmt(CodeGen& context, FunctionStmt& stmt) {
+    auto& module = context.getModule();
+    auto& llvmContext = context.getContext();
+    auto& builder = context.getBuilder();
+    
+    std::vector<Type*> paramTypes;
+    for (const auto& param : stmt.getParameters()) {
+        auto paramType = context.getLLVMType(param.second);
+        if (!paramType) {
+            throw std::runtime_error("Unknown parameter type for: " + param.first);
+        }
+        paramTypes.push_back(paramType);
+    }
+    
+    auto returnType = context.getLLVMType(stmt.getReturnType());
+    if (!returnType) {
+        throw std::runtime_error("Unknown return type for function: " + stmt.getName());
+    }
+    
+    auto funcType = FunctionType::get(returnType, paramTypes, false);
+    auto function = Function::Create(funcType, Function::ExternalLinkage, stmt.getName(), &module);
+    
+    if (stmt.getBody()) {
+        BasicBlock* savedInsertBlock = builder.GetInsertBlock();
+        
+        context.enterScope();
+
+        auto entryBlock = BasicBlock::Create(llvmContext, "entry", function);
+        builder.SetInsertPoint(entryBlock);
+        
+        unsigned idx = 0;
+        for (auto& arg : function->args()) {
+            const auto& param = stmt.getParameters()[idx];
+            arg.setName(param.first);
+            
+            auto alloca = builder.CreateAlloca(arg.getType(), nullptr, param.first);
+            builder.CreateStore(&arg, alloca);
+            
+            context.getNamedValues()[param.first] = alloca;
+            context.getVariableTypes()[param.first] = param.second;
+            idx++;
+        }
+        
+        stmt.getBody()->codegen(context);
+        
+        if (!builder.GetInsertBlock()->getTerminator()) {
+            if (stmt.getReturnType() == VarType::VOID) {
+                builder.CreateRetVoid();
+            } else {
+                llvm::Value* defaultReturn = createDefaultValue(returnType, stmt.getReturnType());
+                if (defaultReturn) {
+                    builder.CreateRet(defaultReturn);
+                } else {
+                    throw std::runtime_error("Function '" + stmt.getName() + 
+                                           "' is missing a return statement");
+                }
+            }
+        }
+        
+        context.exitScope();
+        
+        if (verifyFunction(*function, &llvm::errs())) {
+            function->print(llvm::errs());
+            throw std::runtime_error("Function '" + stmt.getName() + "' failed verification");
+        }
+        
+        if (savedInsertBlock) {
+            builder.SetInsertPoint(savedInsertBlock);
+        }
+    }
+    
+    return function;
+}
+
 
 llvm::Value* StatementCodeGen::codegenBlockStmt(CodeGen& context, BlockStmt& stmt) {
     auto& builder = context.getBuilder();
 
     for (auto& stmt : stmt.getStatements()) {
         stmt->codegen(context);
+        
+        if (builder.GetInsertBlock()->getTerminator()) {
+            break;
+        }
     }
     
     return nullptr;
 }
-
 llvm::Value* StatementCodeGen::codegenIfStmt(CodeGen& context, IfStmt& stmt) {
     auto& builder = context.getBuilder();
     auto& llvmContext = context.getContext();
@@ -268,12 +456,10 @@ llvm::Value* StatementCodeGen::codegenIfStmt(CodeGen& context, IfStmt& stmt) {
     
     auto thenBlock = BasicBlock::Create(llvmContext, "then", currentFunction);
     auto mergeBlock = BasicBlock::Create(llvmContext, "ifcont");
-    BasicBlock* elseBlock;
+    BasicBlock* elseBlock = mergeBlock;
     
     if (stmt.getElseBranch()) {
         elseBlock = BasicBlock::Create(llvmContext, "else");
-    } else {
-        elseBlock = mergeBlock;
     }
     
     builder.CreateCondBr(condValue, thenBlock, elseBlock);
@@ -283,7 +469,7 @@ llvm::Value* StatementCodeGen::codegenIfStmt(CodeGen& context, IfStmt& stmt) {
     if (!builder.GetInsertBlock()->getTerminator()) {
         builder.CreateBr(mergeBlock);
     }
-    
+
     if (stmt.getElseBranch()) {
         currentFunction->insert(currentFunction->end(), elseBlock);
         builder.SetInsertPoint(elseBlock);
@@ -292,9 +478,127 @@ llvm::Value* StatementCodeGen::codegenIfStmt(CodeGen& context, IfStmt& stmt) {
             builder.CreateBr(mergeBlock);
         }
     }
-    
+
     currentFunction->insert(currentFunction->end(), mergeBlock);
     builder.SetInsertPoint(mergeBlock);
+    
+    return nullptr;
+}
+llvm::Value* StatementCodeGen::codegenReturnStmt(CodeGen& context, ReturnStmt& stmt) {
+    auto& builder = context.getBuilder();
+    auto& llvmContext = context.getContext();
+    
+    auto currentFunction = builder.GetInsertBlock()->getParent();
+    if (!currentFunction) {
+        throw std::runtime_error("Return statement not in a function");
+    }
+    
+    auto expectedReturnType = currentFunction->getReturnType();
+    
+    if (stmt.getValue()) {
+        auto retValue = stmt.getValue()->codegen(context);
+        if (!retValue) {
+            throw std::runtime_error("Failed to generate return value");
+        }
+        
+        if (expectedReturnType->isIntegerTy(1)) {
+            if (auto* constInt = dyn_cast<ConstantInt>(retValue)) {
+                if (!constInt->isZero()) {
+                    throw std::runtime_error("uint0 functions can only return 0");
+                }
+            }
+            if (retValue->getType()->isIntegerTy()) {
+                if (retValue->getType()->getIntegerBitWidth() != 1) {
+                    retValue = builder.CreateTrunc(retValue, expectedReturnType);
+                }
+            } else {
+                retValue = ConstantInt::get(expectedReturnType, 0);
+            }
+        }
+        else if (retValue->getType() != expectedReturnType) {
+            if (expectedReturnType->isIntegerTy() && retValue->getType()->isIntegerTy()) {
+                unsigned expectedBits = expectedReturnType->getIntegerBitWidth();
+                unsigned actualBits = retValue->getType()->getIntegerBitWidth();
+                
+                if (actualBits > expectedBits) {
+                    retValue = builder.CreateTrunc(retValue, expectedReturnType, "truncret");
+                } else {
+                    VarType sourceType = AST::inferSourceType(retValue, context);
+                    if (TypeBounds::isUnsignedType(sourceType)) {
+                        retValue = builder.CreateZExt(retValue, expectedReturnType, "zextret");
+                    } else {
+                        retValue = builder.CreateSExt(retValue, expectedReturnType, "sextret");
+                    }
+                }
+            } 
+            else if (expectedReturnType->isFPOrFPVectorTy() && retValue->getType()->isFPOrFPVectorTy()) {
+                if (expectedReturnType->isFloatTy() && retValue->getType()->isDoubleTy()) {
+                    retValue = builder.CreateFPTrunc(retValue, expectedReturnType, "fptruncret");
+                } else if (expectedReturnType->isDoubleTy() && retValue->getType()->isFloatTy()) {
+                    retValue = builder.CreateFPExt(retValue, expectedReturnType, "fpextret");
+                }
+            }
+            else if (expectedReturnType->isFPOrFPVectorTy() && retValue->getType()->isIntegerTy()) {
+                VarType sourceType = AST::inferSourceType(retValue, context);
+                if (TypeBounds::isUnsignedType(sourceType)) {
+                    retValue = builder.CreateUIToFP(retValue, expectedReturnType, "uitofpret");
+                } else {
+                    retValue = builder.CreateSIToFP(retValue, expectedReturnType, "sitofpret");
+                }
+            }
+            else if (expectedReturnType->isIntegerTy() && retValue->getType()->isFPOrFPVectorTy()) {
+                retValue = builder.CreateFPToSI(retValue, expectedReturnType, "fptosiret");
+            }
+            else if (expectedReturnType->isPointerTy() && retValue->getType()->isPointerTy()) {
+                
+            }
+            else if (expectedReturnType->isIntegerTy() && retValue->getType()->isIntegerTy(1)) {
+                retValue = builder.CreateZExt(retValue, expectedReturnType, "booltointret");
+            }
+            else if (expectedReturnType->isIntegerTy(1) && retValue->getType()->isIntegerTy()) {
+                retValue = builder.CreateICmpNE(retValue, 
+                    ConstantInt::get(retValue->getType(), 0), "inttoboolret");
+            }
+            else if (expectedReturnType->isVoidTy()) {
+                throw std::runtime_error("Cannot return a value from void function");
+            }
+            else {
+                std::string expectedTypeStr;
+                llvm::raw_string_ostream expectedOS(expectedTypeStr);
+                expectedReturnType->print(expectedOS);
+                
+                std::string actualTypeStr;
+                llvm::raw_string_ostream actualOS(actualTypeStr);
+                retValue->getType()->print(actualOS);
+                
+                throw std::runtime_error("Return type mismatch: expected " + expectedTypeStr + 
+                                       ", got " + actualTypeStr);
+            }
+        }
+
+        if (retValue->getType() != expectedReturnType) {
+            std::string expectedTypeStr;
+            llvm::raw_string_ostream expectedOS(expectedTypeStr);
+            expectedReturnType->print(expectedOS);
+            
+            std::string actualTypeStr;
+            llvm::raw_string_ostream actualOS(actualTypeStr);
+            retValue->getType()->print(actualOS);
+            
+            throw std::runtime_error("Return type conversion failed: expected " + 
+                                   expectedTypeStr + ", got " + actualTypeStr);
+        }
+        
+        builder.CreateRet(retValue);
+    } else {
+        if (expectedReturnType->isIntegerTy(1)) {
+            builder.CreateRet(ConstantInt::get(expectedReturnType, 0));
+        } else if (!expectedReturnType->isVoidTy()) {
+            throw std::runtime_error("Non-void function must return a value");
+        } else {
+            builder.CreateRetVoid();
+        }
+    }
     
     return nullptr;
 }

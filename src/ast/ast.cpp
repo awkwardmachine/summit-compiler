@@ -67,3 +67,11 @@ llvm::Value* CastExpr::codegen(::CodeGen& context) {
 llvm::Value* Program::codegen(::CodeGen& context) {
     return context.codegen(*this);
 }
+
+llvm::Value* FunctionStmt::codegen(::CodeGen& context) {
+    return context.codegen(*this);
+}
+
+llvm::Value* ReturnStmt::codegen(::CodeGen& context) {
+    return context.codegen(*this);
+}

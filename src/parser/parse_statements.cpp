@@ -160,13 +160,73 @@ unique_ptr<Stmt> Parser::parseElseIfChain() {
     
     return make_unique<IfStmt>(move(condition), move(thenBlock), move(elseBranch));
 }
+unique_ptr<Stmt> Parser::parseFunctionDeclaration() {
+    if (!match(TokenType::FUNC)) error("Expected 'func'");
+    if (!match(TokenType::IDENTIFIER)) error("Expected function name");
+    string name = tokens[current - 1].value;
+    
+    if (!match(TokenType::LPAREN)) error("Expected '(' after function name");
+    
+    vector<pair<string, VarType>> parameters;
+    if (!check(TokenType::RPAREN)) {
+        do {
+            if (!match(TokenType::IDENTIFIER)) error("Expected parameter name");
+            string paramName = tokens[current - 1].value;
+            if (!match(TokenType::COLON)) error("Expected ':' after parameter name");
+            VarType paramType = parseType();
+            parameters.emplace_back(paramName, paramType);
+        } while (match(TokenType::COMMA));
+    }
+    
+    if (!match(TokenType::RPAREN)) error("Expected ')' after parameters");
+    
+    VarType returnType = VarType::VOID;
+    if (match(TokenType::MINUS)) {
+        if (!match(TokenType::GREATER)) error("Expected '>' after '-' for return type");
+        returnType = parseType();
+    }
+    
+    auto body = make_unique<BlockStmt>();
+    while (!check(TokenType::END) && !isAtEnd()) {
+        body->addStatement(parseStatement());
+    }
+    
+    if (!match(TokenType::END)) {
+        error("Expected 'end' after function body");
+    }
+    
+    return make_unique<FunctionStmt>(name, move(parameters), returnType, move(body));
+}
+
+unique_ptr<Stmt> Parser::parseReturnStatement() {
+    if (!match(TokenType::RETURN)) error("Expected 'return'");
+    
+    unique_ptr<Expr> value = nullptr;
+    if (!check(TokenType::SEMICOLON)) {
+        value = parseExpression();
+    }
+    
+    const Token& lastToken = tokens[current - 1];
+    if (!match(TokenType::SEMICOLON)) {
+        errorAt(lastToken, "Expected ';' after return statement");
+    }
+    
+    return make_unique<ReturnStmt>(move(value));
+}
 
 unique_ptr<Stmt> Parser::parseStatement() {
+    if (check(TokenType::FUNC)) {
+        return parseFunctionDeclaration();
+    }
+    if (check(TokenType::RETURN)) {
+        return parseReturnStatement();
+    }
     if (check(TokenType::IF)) {
         return parseIfStatement();
     }
-    if (check(TokenType::VAR) || check(TokenType::CONST)) return parseVariableDeclaration();
-    
+    if (check(TokenType::VAR) || check(TokenType::CONST)) {
+        return parseVariableDeclaration();
+    }
     if (check(TokenType::IDENTIFIER) && checkNext(TokenType::EQUALS)) { 
         return parseAssignment();
     }

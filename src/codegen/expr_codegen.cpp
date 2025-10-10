@@ -110,7 +110,6 @@ llvm::Value* ExpressionCodeGen::codegenFloat(CodeGen& context, FloatExpr& expr) 
             throw std::runtime_error("Unsupported float type");
     }
 }
-
 llvm::Value* ExpressionCodeGen::codegenVariable(CodeGen& context, VariableExpr& expr) {
     auto var = context.lookupVariable(expr.getName());
     if (!var) {
@@ -124,8 +123,6 @@ llvm::Value* ExpressionCodeGen::codegenVariable(CodeGen& context, VariableExpr& 
     
     auto& builder = context.getBuilder();
 
-    bool isUnsigned = TypeBounds::isUnsignedType(varType);
-
     llvm::Type* loadType = context.getLLVMType(varType);
     if (!loadType) {
         throw std::runtime_error("Unknown variable type for: " + expr.getName());
@@ -134,18 +131,8 @@ llvm::Value* ExpressionCodeGen::codegenVariable(CodeGen& context, VariableExpr& 
     std::cout << "DEBUG: Load type = ";
     loadType->print(llvm::errs());
     std::cout << std::endl;
-    
-    llvm::Value* loadedValue = builder.CreateLoad(loadType, var, expr.getName().c_str());
 
-    if (loadType->isIntegerTy() && loadType->getIntegerBitWidth() < 64) {
-        std::cout << "DEBUG: Extending " << loadType->getIntegerBitWidth() 
-                  << "-bit integer to 64 bits" << std::endl;
-        if (isUnsigned) {
-            loadedValue = builder.CreateZExt(loadedValue, Type::getInt64Ty(context.getContext()));
-        } else {
-            loadedValue = builder.CreateSExt(loadedValue, Type::getInt64Ty(context.getContext()));
-        }
-    }
+    llvm::Value* loadedValue = builder.CreateLoad(loadType, var, expr.getName().c_str());
     
     return loadedValue;
 }
@@ -199,7 +186,6 @@ llvm::Value* ExpressionCodeGen::codegenUnary(CodeGen& context, UnaryExpr& expr) 
             throw std::runtime_error("Unknown unary operator");
     }
 }
-
 llvm::Value* ExpressionCodeGen::codegenBinary(CodeGen& context, BinaryExpr& expr) {
     auto lhs = expr.getLHS()->codegen(context);
     auto rhs = expr.getRHS()->codegen(context);
@@ -363,10 +349,24 @@ llvm::Value* ExpressionCodeGen::codegenBinary(CodeGen& context, BinaryExpr& expr
         }
     }
 
-    if (lhs->getType()->getIntegerBitWidth() == 1)
-        lhs = builder.CreateZExt(lhs, Type::getInt64Ty(context.getContext()));
-    if (rhs->getType()->getIntegerBitWidth() == 1)
-        rhs = builder.CreateZExt(rhs, Type::getInt64Ty(context.getContext()));
+    if (lhs->getType()->isIntegerTy(1) && rhs->getType()->isIntegerTy(1)) {
+        switch (expr.getOp()) {
+            case BinaryOp::BITWISE_AND: 
+            case BinaryOp::LOGICAL_AND: 
+                return builder.CreateAnd(lhs, rhs, "andtmp");
+            case BinaryOp::BITWISE_OR: 
+            case BinaryOp::LOGICAL_OR: 
+                return builder.CreateOr(lhs, rhs, "ortmp");
+            case BinaryOp::BITWISE_XOR: 
+                return builder.CreateXor(lhs, rhs, "xortmp");
+            case BinaryOp::EQUAL: 
+                return builder.CreateICmpEQ(lhs, rhs, "eqtmp");
+            case BinaryOp::NOT_EQUAL: 
+                return builder.CreateICmpNE(lhs, rhs, "netmp");
+            default:
+                break;
+        }
+    }
 
     if (lhs->getType() != rhs->getType()) {
         if (lhs->getType()->getIntegerBitWidth() < rhs->getType()->getIntegerBitWidth()) {
@@ -375,6 +375,8 @@ llvm::Value* ExpressionCodeGen::codegenBinary(CodeGen& context, BinaryExpr& expr
             rhs = builder.CreateSExt(rhs, lhs->getType());
         }
     }
+
+    llvm::Type* resultType = lhs->getType();
 
     switch (expr.getOp()) {
         case BinaryOp::ADD: return builder.CreateAdd(lhs, rhs, "addtmp");
@@ -411,87 +413,169 @@ llvm::Value* ExpressionCodeGen::codegenBinary(CodeGen& context, BinaryExpr& expr
         default: throw std::runtime_error("Unknown binary operator");
     }
 }
-
 llvm::Value* ExpressionCodeGen::codegenCall(CodeGen& context, CallExpr& expr) {
     auto& module = context.getModule();
     auto& builder = context.getBuilder();
     auto& llvmContext = context.getContext();
 
-    if (expr.getCallee() == "@dec") {
-        if (expr.getArgs().size() != 1) {
-            throw std::runtime_error("@dec expects exactly one argument");
+    if (expr.getCallee()[0] == '@') {
+        if (expr.getCallee() == "@dec") {
+            if (expr.getArgs().size() != 1) {
+                throw std::runtime_error("@dec expects exactly one argument");
+            }
+            auto value = expr.getArgs()[0]->codegen(context);
+            return AST::convertToDecimalString(context, value);
         }
-        auto value = expr.getArgs()[0]->codegen(context);
-        return AST::convertToDecimalString(context, value);
-    }
 
-    if (expr.getCallee() == "@bin") {
-        if (expr.getArgs().size() != 1) {
-            throw std::runtime_error("@bin expects exactly one argument");
-        }
-        auto value = expr.getArgs()[0]->codegen(context);
-        return AST::convertToBinaryString(context, value);
-    }
-    
-    if (expr.getCallee() == "@print" || expr.getCallee() == "@println") {
-        if (expr.getArgs().size() < 1) {
-            throw std::runtime_error("print/println expects at least one argument");
+        if (expr.getCallee() == "@bin") {
+            if (expr.getArgs().size() != 1) {
+                throw std::runtime_error("@bin expects exactly one argument");
+            }
+            auto value = expr.getArgs()[0]->codegen(context);
+            return AST::convertToBinaryString(context, value);
         }
         
-        auto printfFunc = module.getFunction("printf");
-        if (!printfFunc) {
-            auto* i32 = Type::getInt32Ty(llvmContext);
-            auto* i8Ptr = PointerType::get(Type::getInt8Ty(llvmContext), 0);
-            auto printfType = FunctionType::get(i32, {i8Ptr}, true);
-            printfFunc = Function::Create(printfType, Function::ExternalLinkage, "printf", &module);
-        }
-        
-        if (auto* formatExpr = dynamic_cast<FormatStringExpr*>(expr.getArgs()[0].get())) {
-            auto result = formatExpr->codegen(context);
-            
-            if (expr.getCallee() == "@println") {
-                const std::string& formatStr = formatExpr->getFormatStr();
-                if (!formatStr.empty() && formatStr.back() != '\n') {
-                    auto newlineStr = builder.CreateGlobalStringPtr("\n");
-                    builder.CreateCall(printfFunc, {newlineStr});
-                }
+        if (expr.getCallee() == "@print" || expr.getCallee() == "@println") {
+            if (expr.getArgs().size() < 1) {
+                throw std::runtime_error("print/println expects at least one argument");
             }
             
-            return result;
-        }
+            auto printfFunc = module.getFunction("printf");
+            if (!printfFunc) {
+                auto* i32 = Type::getInt32Ty(llvmContext);
+                auto* i8Ptr = PointerType::get(Type::getInt8Ty(llvmContext), 0);
+                auto printfType = FunctionType::get(i32, {i8Ptr}, true);
+                printfFunc = Function::Create(printfType, Function::ExternalLinkage, "printf", &module);
+            }
 
-        std::vector<llvm::Value*> printfArgs;
+            if (auto* formatExpr = dynamic_cast<FormatStringExpr*>(expr.getArgs()[0].get())) {
+                auto result = formatExpr->codegen(context);
+                
+                if (expr.getCallee() == "@println") {
+                    const std::string& formatStr = formatExpr->getFormatStr();
+                    if (!formatStr.empty() && formatStr.back() != '\n') {
+                        auto newlineStr = builder.CreateGlobalStringPtr("\n");
+                        builder.CreateCall(printfFunc, {newlineStr});
+                    }
+                }
+                
+                return result;
+            }
 
-        std::string formatStr;
-        for (size_t i = 0; i < expr.getArgs().size(); i++) {
-            if (i > 0) formatStr += " ";
-            formatStr += "%s";
+            std::vector<llvm::Value*> printfArgs;
+
+            std::string formatStr;
+            for (size_t i = 0; i < expr.getArgs().size(); i++) {
+                if (i > 0) formatStr += " ";
+                formatStr += "%s";
+            }
+            
+            if (expr.getCallee() == "@println") {
+                formatStr += "\n";
+            }
+            
+            auto formatStrPtr = builder.CreateGlobalStringPtr(formatStr);
+            printfArgs.push_back(formatStrPtr);
+            
+            for (size_t i = 0; i < expr.getArgs().size(); i++) {
+                auto argValue = expr.getArgs()[i]->codegen(context);
+                if (!argValue) {
+                    throw std::runtime_error("Failed to generate argument " + std::to_string(i) + " for " + expr.getCallee());
+                }
+                auto stringValue = AST::convertToString(context, argValue);
+                if (!stringValue) {
+                    throw std::runtime_error("Failed to convert argument " + std::to_string(i) + " to string");
+                }
+                printfArgs.push_back(stringValue);
+            }
+            
+            return builder.CreateCall(printfFunc, printfArgs);
         }
         
-        if (expr.getCallee() == "@println") {
-            formatStr += "\n";
-        }
-        
-        auto formatStrPtr = builder.CreateGlobalStringPtr(formatStr);
-        printfArgs.push_back(formatStrPtr);
-        
-        for (size_t i = 0; i < expr.getArgs().size(); i++) {
-            auto argValue = expr.getArgs()[i]->codegen(context);
-            auto stringValue = AST::convertToString(context, argValue);
-            printfArgs.push_back(stringValue);
-        }
-        
-        return builder.CreateCall(printfFunc, printfArgs);
+        throw std::runtime_error("Unknown builtin function: " + expr.getCallee());
     }
     
     auto func = module.getFunction(expr.getCallee());
     if (!func) {
         throw std::runtime_error("Unknown function: " + expr.getCallee());
     }
+
+    if (func->arg_size() != expr.getArgs().size()) {
+        throw std::runtime_error("Function '" + expr.getCallee() + "' expects " + 
+                               std::to_string(func->arg_size()) + " arguments, but got " + 
+                               std::to_string(expr.getArgs().size()));
+    }
     
     std::vector<llvm::Value*> args;
-    for (auto& arg : expr.getArgs()) {
-        args.push_back(arg->codegen(context));
+    unsigned argIdx = 0;
+    for (auto& argExpr : expr.getArgs()) {
+        auto argValue = argExpr->codegen(context);
+        if (!argValue) {
+            throw std::runtime_error("Failed to generate argument " + std::to_string(argIdx) + 
+                                   " for function " + expr.getCallee());
+        }
+        
+        auto paramIter = func->arg_begin();
+        std::advance(paramIter, argIdx);
+        llvm::Type* expectedType = paramIter->getType();
+
+        if (argValue->getType() != expectedType) {
+            if (expectedType->isIntegerTy() && argValue->getType()->isIntegerTy()) {
+                unsigned expectedBits = expectedType->getIntegerBitWidth();
+                unsigned actualBits = argValue->getType()->getIntegerBitWidth();
+                
+                if (actualBits > expectedBits) {
+                    argValue = builder.CreateTrunc(argValue, expectedType);
+                } else if (actualBits < expectedBits) {
+                    VarType sourceType = AST::inferSourceType(argValue, context);
+                    if (TypeBounds::isUnsignedType(sourceType)) {
+                        argValue = builder.CreateZExt(argValue, expectedType);
+                    } else {
+                        argValue = builder.CreateSExt(argValue, expectedType);
+                    }
+                }
+            }
+            else if (expectedType->isFPOrFPVectorTy() && argValue->getType()->isFPOrFPVectorTy()) {
+                if (expectedType->isFloatTy() && argValue->getType()->isDoubleTy()) {
+                    argValue = builder.CreateFPTrunc(argValue, expectedType);
+                } else if (expectedType->isDoubleTy() && argValue->getType()->isFloatTy()) {
+                    argValue = builder.CreateFPExt(argValue, expectedType);
+                }
+            }
+            else if (expectedType->isFPOrFPVectorTy() && argValue->getType()->isIntegerTy()) {
+                VarType sourceType = AST::inferSourceType(argValue, context);
+                if (TypeBounds::isUnsignedType(sourceType)) {
+                    argValue = builder.CreateUIToFP(argValue, expectedType);
+                } else {
+                    argValue = builder.CreateSIToFP(argValue, expectedType);
+                }
+            }
+            else if (expectedType->isIntegerTy() && argValue->getType()->isFPOrFPVectorTy()) {
+                argValue = builder.CreateFPToSI(argValue, expectedType);
+            }
+            else if (expectedType->isIntegerTy(1) && argValue->getType()->isIntegerTy()) {
+                argValue = builder.CreateICmpNE(argValue, ConstantInt::get(argValue->getType(), 0));
+            }
+            else if (expectedType->isIntegerTy() && argValue->getType()->isIntegerTy(1)) {
+                argValue = builder.CreateZExt(argValue, expectedType);
+            }
+            else {
+                std::string expectedTypeStr;
+                llvm::raw_string_ostream expectedOS(expectedTypeStr);
+                expectedType->print(expectedOS);
+                
+                std::string actualTypeStr;
+                llvm::raw_string_ostream actualOS(actualTypeStr);
+                argValue->getType()->print(actualOS);
+                
+                throw std::runtime_error("Type mismatch in argument " + std::to_string(argIdx) + 
+                                       " for function '" + expr.getCallee() + "': expected " + 
+                                       expectedTypeStr + ", got " + actualTypeStr);
+            }
+        }
+        
+        args.push_back(argValue);
+        argIdx++;
     }
     
     return builder.CreateCall(func, args);

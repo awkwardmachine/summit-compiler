@@ -6,6 +6,10 @@
 #include <llvm/IR/DerivedTypes.h>
 #include <iostream>
 #include <algorithm>
+#include "type_inference.h"
+#include "bounds.h"
+
+using namespace llvm;
 
 namespace AST {
     llvm::Value* convertToBinaryString(CodeGen& context, llvm::Value* value) {
@@ -136,61 +140,82 @@ namespace AST {
         return buffer;
     }
 
-    llvm::Value* convertToString(CodeGen& context, llvm::Value* value) {
+    llvm::Value* AST::convertToString(CodeGen& context, llvm::Value* value) {
         auto& builder = context.getBuilder();
         auto& module = context.getModule();
         auto& llvmContext = context.getContext();
-        
-        std::cout << "DEBUG convertToString: value type = ";
-        value->getType()->print(llvm::errs());
-        std::cout << std::endl;
-        
+
         if (value->getType()->isPointerTy()) {
-            std::cout << "DEBUG: It's a pointer type, returning as-is" << std::endl;
             return value;
         }
 
-        auto mallocFunc = module.getFunction("malloc");
-        if (!mallocFunc) {
-            auto* i8Ptr = llvm::PointerType::get(llvm::Type::getInt8Ty(llvmContext), 0);
-            auto* sizeT = llvm::Type::getInt64Ty(llvmContext);
-            auto mallocType = llvm::FunctionType::get(i8Ptr, {sizeT}, false);
-            mallocFunc = llvm::Function::Create(mallocType, llvm::Function::ExternalLinkage, "malloc", &module);
-        }
-        
         auto sprintfFunc = module.getFunction("sprintf");
         if (!sprintfFunc) {
-            auto* i8Ptr = llvm::PointerType::get(llvm::Type::getInt8Ty(llvmContext), 0);
-            auto* i32 = llvm::Type::getInt32Ty(llvmContext);
-            std::vector<llvm::Type*> paramTypes = {i8Ptr, i8Ptr};
-            auto funcType = llvm::FunctionType::get(i32, paramTypes, true);
-            sprintfFunc = llvm::Function::Create(funcType, llvm::Function::ExternalLinkage, "sprintf", &module);
+            auto* i32 = Type::getInt32Ty(llvmContext);
+            auto* i8Ptr = PointerType::get(Type::getInt8Ty(llvmContext), 0);
+            auto sprintfType = FunctionType::get(i32, {i8Ptr, i8Ptr}, true);
+            sprintfFunc = Function::Create(sprintfType, Function::ExternalLinkage, "sprintf", &module);
         }
-
-        const int BUFFER_SIZE = 64;
-        auto* buffer = builder.CreateCall(mallocFunc, {llvm::ConstantInt::get(builder.getInt64Ty(), BUFFER_SIZE)});
-
-        llvm::Value* formatStr;
+        
+        auto* i8 = Type::getInt8Ty(llvmContext);
+        auto* bufferSize = ConstantInt::get(Type::getInt64Ty(llvmContext), 64);
+        auto* buffer = builder.CreateAlloca(i8, bufferSize, "str_buffer");
+        
+        std::string formatStr;
+        llvm::Value* valueToConvert = value;
         
         if (value->getType()->isIntegerTy()) {
             unsigned bitWidth = value->getType()->getIntegerBitWidth();
-            std::cout << "DEBUG: Integer type, bitWidth = " << bitWidth << std::endl;
-            
-            if (bitWidth < 64) {
-                std::cout << "DEBUG: Extending from " << bitWidth << " to 64 bits" << std::endl;
-                value = builder.CreateSExt(value, llvm::Type::getInt64Ty(llvmContext));
+
+            VarType sourceType = AST::inferSourceType(value, context);
+            bool isUnsigned = TypeBounds::isUnsignedType(sourceType);
+
+            if (bitWidth == 1) {
+                auto trueStr = builder.CreateGlobalStringPtr("true");
+                auto falseStr = builder.CreateGlobalStringPtr("false");
+                return builder.CreateSelect(value, trueStr, falseStr);
             }
-            
-            formatStr = builder.CreateGlobalStringPtr("%lld");
-            std::cout << "DEBUG: Using format %lld for integer" << std::endl;
-            std::vector<llvm::Value*> sprintfArgs = {buffer, formatStr, value};
-            builder.CreateCall(sprintfFunc, sprintfArgs);
+            else if (bitWidth < 32) {
+                if (isUnsigned) {
+                    valueToConvert = builder.CreateZExt(value, Type::getInt32Ty(llvmContext));
+                } else {
+                    valueToConvert = builder.CreateSExt(value, Type::getInt32Ty(llvmContext));
+                }
+                formatStr = isUnsigned ? "%u" : "%d";
+            }
+            else if (bitWidth == 32) {
+                formatStr = isUnsigned ? "%u" : "%d";
+            }
+            else if (bitWidth == 64) {
+                formatStr = isUnsigned ? "%llu" : "%lld";
+            }
+            else {
+                if (bitWidth > 64) {
+                    valueToConvert = builder.CreateTrunc(value, Type::getInt64Ty(llvmContext));
+                } else {
+                    if (isUnsigned) {
+                        valueToConvert = builder.CreateZExt(value, Type::getInt64Ty(llvmContext));
+                    } else {
+                        valueToConvert = builder.CreateSExt(value, Type::getInt64Ty(llvmContext));
+                    }
+                }
+                formatStr = isUnsigned ? "%llu" : "%lld";
+            }
+        }
+        else if (value->getType()->isFloatTy()) {
+            valueToConvert = builder.CreateFPExt(value, Type::getDoubleTy(llvmContext));
+            formatStr = "%g";
+        }
+        else if (value->getType()->isDoubleTy()) {
+            formatStr = "%g";
         }
         else {
-            formatStr = builder.CreateGlobalStringPtr("%p");
-            std::vector<llvm::Value*> sprintfArgs = {buffer, formatStr, value};
-            builder.CreateCall(sprintfFunc, sprintfArgs);
+            throw std::runtime_error("Cannot convert this type to string");
         }
+        
+        auto formatStrPtr = builder.CreateGlobalStringPtr(formatStr);
+        
+        builder.CreateCall(sprintfFunc, {buffer, formatStrPtr, valueToConvert});
         
         return buffer;
     }

@@ -10,7 +10,7 @@ std::string Token::toString() const {
         {TokenType::IF, "IF"}, {TokenType::THEN, "THEN"}, {TokenType::ELSE, "ELSE"},
         {TokenType::AND, "AND"}, {TokenType::OR, "OR"}, {TokenType::NOT, "NOT"},
         {TokenType::END, "END"}, {TokenType::BOOL, "BOOL"}, {TokenType::TRUE, "TRUE"},
-        {TokenType::FALSE, "FALSE"},
+        {TokenType::FALSE, "FALSE"}, {TokenType::FUNC, "FUNC"}, {TokenType::RETURN, "RET"},
         
         {TokenType::INT4, "INT4"}, {TokenType::INT8, "INT8"}, {TokenType::INT12, "INT12"},
         {TokenType::INT16, "INT16"}, {TokenType::INT24, "INT24"}, {TokenType::INT32, "INT32"},

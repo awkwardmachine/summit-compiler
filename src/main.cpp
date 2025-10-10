@@ -84,6 +84,7 @@ int main(int argc, char* argv[]) {
             codegen.printIR();
         }
 
+        codegen.printIR();
         codegen.printIRToFile(irFilename);
 
         if (!compileToExecutable(irFilename, executableName)) {
