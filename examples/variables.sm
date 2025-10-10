@@ -1,3 +1,3 @@
-const pi: float64 = 3.141592653;
-var pi_as_float32: float32 = pi as float32;
-@println(pi_as_float32);
+var x: int8 = 0xF;
+
+@println(x);

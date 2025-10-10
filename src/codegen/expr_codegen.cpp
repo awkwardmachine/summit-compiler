@@ -1,7 +1,9 @@
 #include "expr_codegen.h"
-#include "codegen.h"
-#include <llvm/IR/Verifier.h>
+#include "type_inference.h"
+#include "string_conversions.h"
+#include "format_utils.h"
 #include "codegen/bounds.h"
+#include <llvm/IR/Verifier.h>
 #include <iostream>
 #include <regex>
 #include <vector>
@@ -12,98 +14,6 @@
 
 using namespace llvm;
 using namespace AST;
-
-VarType inferSourceType(llvm::Value* value, CodeGen& context) {
-    if (value->getType()->isFloatTy()) return VarType::FLOAT32;
-    if (value->getType()->isDoubleTy()) return VarType::FLOAT64;
-    if (value->getType()->isIntegerTy(1)) return VarType::BOOL;
-    if (value->getType()->isPointerTy()) return VarType::STRING;
-    
-    if (value->getType()->isIntegerTy()) {
-        return VarType::INT64;
-    }
-    
-    return VarType::VOID;
-}
-
-bool isConvertibleToString(llvm::Value* value) {
-    return value->getType()->isIntegerTy() || 
-           value->getType()->isIntegerTy(1);
-}
-
-llvm::Value* convertToString(CodeGen& context, llvm::Value* value) {
-    auto& builder = context.getBuilder();
-    auto& module = context.getModule();
-    auto& llvmContext = context.getContext();
-    
-    if (value->getType()->isPointerTy()) {
-        return value;
-    }
-
-    auto mallocFunc = module.getFunction("malloc");
-    if (!mallocFunc) {
-        auto* i8Ptr = PointerType::get(Type::getInt8Ty(llvmContext), 0);
-        auto* sizeT = Type::getInt64Ty(llvmContext);
-        auto mallocType = FunctionType::get(i8Ptr, {sizeT}, false);
-        mallocFunc = Function::Create(mallocType, Function::ExternalLinkage, "malloc", &module);
-    }
-    
-    auto sprintfFunc = module.getFunction("sprintf");
-    if (!sprintfFunc) {
-        auto* i8Ptr = PointerType::get(Type::getInt8Ty(llvmContext), 0);
-        auto* i32 = Type::getInt32Ty(llvmContext);
-        std::vector<Type*> paramTypes = {i8Ptr, i8Ptr};
-        auto funcType = FunctionType::get(i32, paramTypes, true);
-        sprintfFunc = Function::Create(funcType, Function::ExternalLinkage, "sprintf", &module);
-    }
-
-    const int BUFFER_SIZE = 64;
-    auto* buffer = builder.CreateCall(mallocFunc, {ConstantInt::get(builder.getInt64Ty(), BUFFER_SIZE)});
-
-    llvm::Value* formatStr;
-    
-    if (value->getType()->isFloatTy()) {
-        formatStr = builder.CreateGlobalStringPtr("%.6f");
-        value = builder.CreateFPExt(value, Type::getDoubleTy(llvmContext));
-        std::vector<Value*> sprintfArgs = {buffer, formatStr, value};
-        builder.CreateCall(sprintfFunc, sprintfArgs);
-    }
-    else if (value->getType()->isDoubleTy()) {
-        formatStr = builder.CreateGlobalStringPtr("%.15lf");
-        std::vector<Value*> sprintfArgs = {buffer, formatStr, value};
-        builder.CreateCall(sprintfFunc, sprintfArgs);
-    }
-    else if (value->getType()->isIntegerTy(1)) {
-        auto zero64 = builder.CreateZExt(value, Type::getInt64Ty(llvmContext));
-        formatStr = builder.CreateGlobalStringPtr("%s");
-        auto trueStr = builder.CreateGlobalStringPtr("true");
-        auto falseStr = builder.CreateGlobalStringPtr("false");
-        auto isTrue = builder.CreateICmpNE(zero64, ConstantInt::get(zero64->getType(), 0));
-        auto boolStr = builder.CreateSelect(isTrue, trueStr, falseStr);
-        
-        auto strcpyFunc = module.getFunction("strcpy");
-        if (!strcpyFunc) {
-            auto* i8Ptr = PointerType::get(Type::getInt8Ty(llvmContext), 0);
-            std::vector<Type*> paramTypes = {i8Ptr, i8Ptr};
-            auto funcType = FunctionType::get(i8Ptr, paramTypes, false);
-            strcpyFunc = Function::Create(funcType, Function::ExternalLinkage, "strcpy", &module);
-        }
-        builder.CreateCall(strcpyFunc, {buffer, boolStr});
-    } 
-    else {
-        auto isLarge = builder.CreateICmpUGE(value, ConstantInt::get(value->getType(), 1ULL << 63));
-
-        auto signedFormatStr = builder.CreateGlobalStringPtr("%ld");
-        auto unsignedFormatStr = builder.CreateGlobalStringPtr("%lu");
-        
-        formatStr = builder.CreateSelect(isLarge, unsignedFormatStr, signedFormatStr);
-        
-        std::vector<Value*> sprintfArgs = {buffer, formatStr, value};
-        builder.CreateCall(sprintfFunc, sprintfArgs);
-    }
-    
-    return buffer;
-}
 
 llvm::Value* ExpressionCodeGen::codegenString(CodeGen& context, StringExpr& expr) {
     auto& builder = context.getBuilder();
@@ -125,6 +35,56 @@ llvm::Value* ExpressionCodeGen::codegenNumber(CodeGen& context, NumberExpr& expr
     }
    
     uint64_t absValue = 0;
+    
+    if (strValue.length() >= 2 && strValue.substr(startPos, 2) == "0b") {
+        std::string binStr = strValue.substr(startPos + 2);
+        
+        binStr.erase(std::remove(binStr.begin(), binStr.end(), '_'), binStr.end());
+        
+        if (binStr.empty()) {
+            throw std::runtime_error("Invalid binary literal: " + strValue);
+        }
+        
+        for (char c : binStr) {
+            if (c != '0' && c != '1') {
+                throw std::runtime_error("Invalid binary digit: " + std::string(1, c));
+            }
+            absValue = (absValue << 1) | (c - '0');
+        }
+        
+        if (isNegative) {
+            return ConstantInt::get(context.getContext(), APInt(64, -static_cast<int64_t>(absValue), true));
+        } else {
+            return ConstantInt::get(context.getContext(), APInt(64, absValue, false));
+        }
+    }
+    
+    if (strValue.length() >= 2 && strValue.substr(startPos, 2) == "0x") {
+        std::string hexStr = strValue.substr(startPos + 2);
+        
+        hexStr.erase(std::remove(hexStr.begin(), hexStr.end(), '_'), hexStr.end());
+        
+        if (hexStr.empty()) {
+            throw std::runtime_error("Invalid hex literal: " + strValue);
+        }
+        
+        for (char c : hexStr) {
+            int digit;
+            if (c >= '0' && c <= '9') digit = c - '0';
+            else if (c >= 'a' && c <= 'f') digit = c - 'a' + 10;
+            else if (c >= 'A' && c <= 'F') digit = c - 'A' + 10;
+            else throw std::runtime_error("Invalid hex digit: " + std::string(1, c));
+            
+            absValue = (absValue << 4) | digit;
+        }
+        
+        if (isNegative) {
+            return ConstantInt::get(context.getContext(), APInt(64, -static_cast<int64_t>(absValue), true));
+        } else {
+            return ConstantInt::get(context.getContext(), APInt(64, absValue, false));
+        }
+    }
+    
     for (size_t i = startPos; i < strValue.length(); i++) {
         if (strValue[i] >= '0' && strValue[i] <= '9') {
             absValue = absValue * 10 + (strValue[i] - '0');
@@ -152,57 +112,92 @@ llvm::Value* ExpressionCodeGen::codegenFloat(CodeGen& context, FloatExpr& expr) 
 }
 
 llvm::Value* ExpressionCodeGen::codegenVariable(CodeGen& context, VariableExpr& expr) {
-    auto& namedValues = context.getNamedValues();
-    auto var = namedValues[expr.getName()];
+    auto var = context.lookupVariable(expr.getName());
     if (!var) {
         throw std::runtime_error("Unknown variable: " + expr.getName());
     }
     
-    auto& variableTypes = context.getVariableTypes();
-    auto typeIt = variableTypes.find(expr.getName());
+    auto varType = context.lookupVariableType(expr.getName());
+    
+    std::cout << "DEBUG codegenVariable: " << expr.getName() 
+              << " type = " << static_cast<int>(varType) << std::endl;
     
     auto& builder = context.getBuilder();
 
-    if (typeIt != variableTypes.end() && typeIt->second == AST::VarType::STRING) {
-        return builder.CreateLoad(
-            llvm::PointerType::get(Type::getInt8Ty(context.getContext()), 0),
-            var,
-            expr.getName().c_str()
-        );
-    }
+    bool isUnsigned = TypeBounds::isUnsignedType(varType);
 
-    if (typeIt != variableTypes.end() && 
-        (typeIt->second == AST::VarType::BOOL || typeIt->second == AST::VarType::UINT0)) {
-        return builder.CreateLoad(Type::getInt1Ty(context.getContext()), var, expr.getName().c_str());
+    llvm::Type* loadType = context.getLLVMType(varType);
+    if (!loadType) {
+        throw std::runtime_error("Unknown variable type for: " + expr.getName());
     }
-
-    if (typeIt != variableTypes.end() && 
-        (typeIt->second == AST::VarType::FLOAT32 || typeIt->second == AST::VarType::FLOAT64)) {
-        llvm::Type* loadType = context.getLLVMType(typeIt->second);
-        return builder.CreateLoad(loadType, var, expr.getName().c_str());
-    }
-
-    bool isUnsigned = false;
-    if (typeIt != variableTypes.end()) {
-        auto varType = typeIt->second;
-        isUnsigned = (varType == AST::VarType::UINT4 || varType == AST::VarType::UINT8 || 
-                     varType == AST::VarType::UINT12 || varType == AST::VarType::UINT16 || 
-                     varType == AST::VarType::UINT24 || varType == AST::VarType::UINT32 || 
-                     varType == AST::VarType::UINT48 || varType == AST::VarType::UINT64);
-    }
-
-    llvm::Type* loadType = Type::getInt64Ty(context.getContext());
-    if (typeIt != variableTypes.end()) {
-        loadType = context.getLLVMType(typeIt->second);
-    }
+    
+    std::cout << "DEBUG: Load type = ";
+    loadType->print(llvm::errs());
+    std::cout << std::endl;
     
     llvm::Value* loadedValue = builder.CreateLoad(loadType, var, expr.getName().c_str());
 
-    if (isUnsigned && loadedValue->getType()->getIntegerBitWidth() < 64) {
-        loadedValue = builder.CreateZExt(loadedValue, Type::getInt64Ty(context.getContext()));
+    if (loadType->isIntegerTy() && loadType->getIntegerBitWidth() < 64) {
+        std::cout << "DEBUG: Extending " << loadType->getIntegerBitWidth() 
+                  << "-bit integer to 64 bits" << std::endl;
+        if (isUnsigned) {
+            loadedValue = builder.CreateZExt(loadedValue, Type::getInt64Ty(context.getContext()));
+        } else {
+            loadedValue = builder.CreateSExt(loadedValue, Type::getInt64Ty(context.getContext()));
+        }
     }
     
     return loadedValue;
+}
+
+llvm::Value* ExpressionCodeGen::codegenUnary(CodeGen& context, UnaryExpr& expr) {
+    auto& builder = context.getBuilder();
+    auto operand = expr.getOperand()->codegen(context);
+    
+    switch (expr.getOp()) {
+        case UnaryOp::LOGICAL_NOT: {
+            if (!operand->getType()->isIntegerTy(1)) {
+                if (operand->getType()->isIntegerTy()) {
+                    operand = builder.CreateICmpNE(operand, 
+                        ConstantInt::get(operand->getType(), 0));
+                } else if (operand->getType()->isFPOrFPVectorTy()) {
+                    operand = builder.CreateFCmpONE(operand,
+                        ConstantFP::get(operand->getType(), 0.0));
+                } else {
+                    throw std::runtime_error("Cannot apply NOT to this type");
+                }
+            }
+            return builder.CreateNot(operand, "nottmp");
+        }
+        
+        case UnaryOp::NEGATE: {
+            if (operand->getType()->isFPOrFPVectorTy()) {
+                return builder.CreateFNeg(operand, "negtmp");
+            } else if (operand->getType()->isIntegerTy()) {
+                return builder.CreateNeg(operand, "negtmp");
+            } else {
+                throw std::runtime_error("Cannot negate this type");
+            }
+        }
+        
+        case UnaryOp::BITWISE_NOT: {
+            if (operand->getType()->isIntegerTy()) {
+                if (operand->getType()->getIntegerBitWidth() == 1) {
+                    operand = builder.CreateZExt(operand, Type::getInt64Ty(context.getContext()));
+                }
+                return builder.CreateNot(operand, "bwnottmp");
+            } else if (operand->getType()->isFPOrFPVectorTy()) {
+                auto intVal = builder.CreateFPToSI(operand, Type::getInt64Ty(context.getContext()));
+                auto notVal = builder.CreateNot(intVal, "bwnottmp");
+                return builder.CreateSIToFP(notVal, operand->getType());
+            } else {
+                throw std::runtime_error("Cannot apply bitwise NOT to this type");
+            }
+        }
+        
+        default:
+            throw std::runtime_error("Unknown unary operator");
+    }
 }
 
 llvm::Value* ExpressionCodeGen::codegenBinary(CodeGen& context, BinaryExpr& expr) {
@@ -215,17 +210,17 @@ llvm::Value* ExpressionCodeGen::codegenBinary(CodeGen& context, BinaryExpr& expr
         bool rhsIsString = rhs->getType()->isPointerTy();
         
         if (lhsIsString || rhsIsString) {
-            if (!lhsIsString && !isConvertibleToString(lhs)) {
+            if (!lhsIsString && !AST::isConvertibleToString(lhs)) {
                 throw std::runtime_error("Left operand cannot be converted to string for concatenation");
             }
-            if (!rhsIsString && !isConvertibleToString(rhs)) {
+            if (!rhsIsString && !AST::isConvertibleToString(rhs)) {
                 throw std::runtime_error("Right operand cannot be converted to string for concatenation");
             }
             
             auto& module = context.getModule();
             auto& llvmContext = context.getContext();
-            llvm::Value* lhsStr = lhsIsString ? lhs : convertToString(context, lhs);
-            llvm::Value* rhsStr = rhsIsString ? rhs : convertToString(context, rhs);
+            llvm::Value* lhsStr = lhsIsString ? lhs : AST::convertToString(context, lhs);
+            llvm::Value* rhsStr = rhsIsString ? rhs : AST::convertToString(context, rhs);
             
             auto strlenFunc = module.getFunction("strlen");
             if (!strlenFunc) {
@@ -246,7 +241,7 @@ llvm::Value* ExpressionCodeGen::codegenBinary(CodeGen& context, BinaryExpr& expr
             auto strcpyFunc = module.getFunction("strcpy");
             if (!strcpyFunc) {
                 auto* i8Ptr = PointerType::get(Type::getInt8Ty(llvmContext), 0);
-                std::vector<Type*> paramTypes = {i8Ptr, i8Ptr};
+                std::vector<llvm::Type*> paramTypes = {i8Ptr, i8Ptr};
                 auto funcType = FunctionType::get(i8Ptr, paramTypes, false);
                 strcpyFunc = Function::Create(funcType, Function::ExternalLinkage, "strcpy", &module);
             }
@@ -254,7 +249,7 @@ llvm::Value* ExpressionCodeGen::codegenBinary(CodeGen& context, BinaryExpr& expr
             auto strcatFunc = module.getFunction("strcat");
             if (!strcatFunc) {
                 auto* i8Ptr = PointerType::get(Type::getInt8Ty(llvmContext), 0);
-                std::vector<Type*> paramTypes = {i8Ptr, i8Ptr};
+                std::vector<llvm::Type*> paramTypes = {i8Ptr, i8Ptr};
                 auto funcType = FunctionType::get(i8Ptr, paramTypes, false);
                 strcatFunc = Function::Create(funcType, Function::ExternalLinkage, "strcat", &module);
             }
@@ -265,7 +260,6 @@ llvm::Value* ExpressionCodeGen::codegenBinary(CodeGen& context, BinaryExpr& expr
             auto bufferSize = builder.CreateAdd(totalLen, ConstantInt::get(llvmContext, APInt(64, 1)));
             
             auto buffer = builder.CreateCall(mallocFunc, {bufferSize});
-
             builder.CreateCall(strcpyFunc, {buffer, lhsStr});
             builder.CreateCall(strcatFunc, {buffer, rhsStr});
             
@@ -273,8 +267,28 @@ llvm::Value* ExpressionCodeGen::codegenBinary(CodeGen& context, BinaryExpr& expr
         }
     }
 
-    if ((lhs->getType()->isPointerTy() || rhs->getType()->isPointerTy()) && expr.getOp() != BinaryOp::ADD) {
-        throw std::runtime_error("Unsupported operation for string types");
+    if (expr.getOp() == BinaryOp::LOGICAL_AND || expr.getOp() == BinaryOp::LOGICAL_OR) {
+        if (!lhs->getType()->isIntegerTy(1)) {
+            if (lhs->getType()->isIntegerTy()) {
+                lhs = builder.CreateICmpNE(lhs, ConstantInt::get(lhs->getType(), 0));
+            } else if (lhs->getType()->isFPOrFPVectorTy()) {
+                lhs = builder.CreateFCmpONE(lhs, ConstantFP::get(lhs->getType(), 0.0));
+            }
+        }
+
+        if (!rhs->getType()->isIntegerTy(1)) {
+            if (rhs->getType()->isIntegerTy()) {
+                rhs = builder.CreateICmpNE(rhs, ConstantInt::get(rhs->getType(), 0));
+            } else if (rhs->getType()->isFPOrFPVectorTy()) {
+                rhs = builder.CreateFCmpONE(rhs, ConstantFP::get(rhs->getType(), 0.0));
+            }
+        }
+        
+        if (expr.getOp() == BinaryOp::LOGICAL_AND) {
+            return builder.CreateAnd(lhs, rhs, "andtmp");
+        } else {
+            return builder.CreateOr(lhs, rhs, "ortmp");
+        }
     }
 
     bool lhsIsFloat = lhs->getType()->isFPOrFPVectorTy();
@@ -305,16 +319,47 @@ llvm::Value* ExpressionCodeGen::codegenBinary(CodeGen& context, BinaryExpr& expr
         }
 
         switch (expr.getOp()) {
-            case BinaryOp::ADD: 
-                return builder.CreateFAdd(lhs, rhs, "faddtmp");
-            case BinaryOp::SUBTRACT: 
-                return builder.CreateFSub(lhs, rhs, "fsubtmp");
-            case BinaryOp::MULTIPLY: 
-                return builder.CreateFMul(lhs, rhs, "fmultmp");
-            case BinaryOp::DIVIDE: 
-                return builder.CreateFDiv(lhs, rhs, "fdivtmp");
+            case BinaryOp::ADD: return builder.CreateFAdd(lhs, rhs, "addtmp");
+            case BinaryOp::SUBTRACT: return builder.CreateFSub(lhs, rhs, "subtmp");
+            case BinaryOp::MULTIPLY: return builder.CreateFMul(lhs, rhs, "multmp");
+            case BinaryOp::DIVIDE: return builder.CreateFDiv(lhs, rhs, "divtmp");
+            case BinaryOp::MODULUS: 
+                {
+                    auto& module = context.getModule();
+                    auto fmodFunc = module.getFunction("fmod");
+                    if (!fmodFunc) {
+                        auto* doubleTy = Type::getDoubleTy(context.getContext());
+                        std::vector<llvm::Type*> paramTypes = {doubleTy, doubleTy};
+                        auto funcType = FunctionType::get(doubleTy, paramTypes, false);
+                        fmodFunc = Function::Create(funcType, Function::ExternalLinkage, "fmod", &module);
+                    }
+                    if (lhs->getType()->isFloatTy()) {
+                        lhs = builder.CreateFPExt(lhs, Type::getDoubleTy(context.getContext()));
+                    }
+                    if (rhs->getType()->isFloatTy()) {
+                        rhs = builder.CreateFPExt(rhs, Type::getDoubleTy(context.getContext()));
+                    }
+                    return builder.CreateCall(fmodFunc, {lhs, rhs}, "fmodtmp");
+                }
+            case BinaryOp::GREATER: return builder.CreateFCmpOGT(lhs, rhs, "gttmp");
+            case BinaryOp::LESS: return builder.CreateFCmpOLT(lhs, rhs, "lttmp");
+            case BinaryOp::GREATER_EQUAL: return builder.CreateFCmpOGE(lhs, rhs, "getmp");
+            case BinaryOp::LESS_EQUAL: return builder.CreateFCmpOLE(lhs, rhs, "letmp");
+            case BinaryOp::EQUAL: return builder.CreateFCmpOEQ(lhs, rhs, "eqtmp");
+            case BinaryOp::NOT_EQUAL: return builder.CreateFCmpONE(lhs, rhs, "netmp");
             default: 
-                throw std::runtime_error("Unknown binary operator for floats");
+                if (expr.getOp() == BinaryOp::BITWISE_AND || 
+                    expr.getOp() == BinaryOp::BITWISE_OR || 
+                    expr.getOp() == BinaryOp::BITWISE_XOR ||
+                    expr.getOp() == BinaryOp::LEFT_SHIFT ||
+                    expr.getOp() == BinaryOp::RIGHT_SHIFT) {
+                    
+                    lhs = builder.CreateFPToSI(lhs, Type::getInt64Ty(context.getContext()));
+                    rhs = builder.CreateFPToSI(rhs, Type::getInt64Ty(context.getContext()));
+                } else {
+                    throw std::runtime_error("Unknown binary operator for floats");
+                }
+                break;
         }
     }
 
@@ -336,61 +381,57 @@ llvm::Value* ExpressionCodeGen::codegenBinary(CodeGen& context, BinaryExpr& expr
         case BinaryOp::SUBTRACT: return builder.CreateSub(lhs, rhs, "subtmp");
         case BinaryOp::MULTIPLY: return builder.CreateMul(lhs, rhs, "multmp");
         case BinaryOp::DIVIDE: 
-            return builder.CreateSDiv(lhs, rhs, "divtmp");
+            if (TypeBounds::isUnsignedType(AST::inferSourceType(lhs, context))) {
+                return builder.CreateUDiv(lhs, rhs, "udivtmp");
+            } else {
+                return builder.CreateSDiv(lhs, rhs, "sdivtmp");
+            }
+        case BinaryOp::MODULUS:
+            if (TypeBounds::isUnsignedType(AST::inferSourceType(lhs, context))) {
+                return builder.CreateURem(lhs, rhs, "uremtmp");
+            } else {
+                return builder.CreateSRem(lhs, rhs, "sremtmp");
+            }
+        case BinaryOp::BITWISE_AND: return builder.CreateAnd(lhs, rhs, "andtmp");
+        case BinaryOp::BITWISE_OR: return builder.CreateOr(lhs, rhs, "ortmp");
+        case BinaryOp::BITWISE_XOR: return builder.CreateXor(lhs, rhs, "xortmp");
+        case BinaryOp::LEFT_SHIFT: return builder.CreateShl(lhs, rhs, "shltmp");
+        case BinaryOp::RIGHT_SHIFT:
+            if (TypeBounds::isUnsignedType(AST::inferSourceType(lhs, context))) {
+                return builder.CreateLShr(lhs, rhs, "lshrtmp");
+            } else {
+                return builder.CreateAShr(lhs, rhs, "ashrtmp");
+            }
+        case BinaryOp::GREATER: return builder.CreateICmpSGT(lhs, rhs, "gttmp");
+        case BinaryOp::LESS: return builder.CreateICmpSLT(lhs, rhs, "lttmp");
+        case BinaryOp::GREATER_EQUAL: return builder.CreateICmpSGE(lhs, rhs, "getmp");
+        case BinaryOp::LESS_EQUAL: return builder.CreateICmpSLE(lhs, rhs, "letmp");
+        case BinaryOp::EQUAL: return builder.CreateICmpEQ(lhs, rhs, "eqtmp");
+        case BinaryOp::NOT_EQUAL: return builder.CreateICmpNE(lhs, rhs, "netmp");
         default: throw std::runtime_error("Unknown binary operator");
     }
-}
-
-std::string buildFormatSpecifiers(const std::string& formatStr) {
-    std::string formatSpecifiers;
-    
-    size_t pos = 0;
-    size_t lastPos = 0;
-    
-    while ((pos = formatStr.find('{', lastPos)) != std::string::npos) {
-        if (pos > lastPos) {
-            formatSpecifiers += formatStr.substr(lastPos, pos - lastPos);
-        }
-        
-        size_t endPos = formatStr.find('}', pos);
-        if (endPos == std::string::npos) {
-            throw std::runtime_error("Unclosed '{' in format string");
-        }
-        
-        formatSpecifiers += "%s";
-        
-        lastPos = endPos + 1;
-    }
-
-    if (lastPos < formatStr.length()) {
-        formatSpecifiers += formatStr.substr(lastPos);
-    }
-    
-    return formatSpecifiers;
-}
-
-std::vector<std::string> extractExpressionStrings(const std::string& formatStr) {
-    std::vector<std::string> expressions;
-    
-    size_t pos = 0;
-    while ((pos = formatStr.find('{', pos)) != std::string::npos) {
-        size_t endPos = formatStr.find('}', pos);
-        if (endPos == std::string::npos) {
-            throw std::runtime_error("Unclosed '{' in format string");
-        }
-        
-        std::string exprStr = formatStr.substr(pos + 1, endPos - pos - 1);
-        expressions.push_back(exprStr);
-        
-        pos = endPos + 1;
-    }
-    
-    return expressions;
 }
 
 llvm::Value* ExpressionCodeGen::codegenCall(CodeGen& context, CallExpr& expr) {
     auto& module = context.getModule();
     auto& builder = context.getBuilder();
+    auto& llvmContext = context.getContext();
+
+    if (expr.getCallee() == "@dec") {
+        if (expr.getArgs().size() != 1) {
+            throw std::runtime_error("@dec expects exactly one argument");
+        }
+        auto value = expr.getArgs()[0]->codegen(context);
+        return AST::convertToDecimalString(context, value);
+    }
+
+    if (expr.getCallee() == "@bin") {
+        if (expr.getArgs().size() != 1) {
+            throw std::runtime_error("@bin expects exactly one argument");
+        }
+        auto value = expr.getArgs()[0]->codegen(context);
+        return AST::convertToBinaryString(context, value);
+    }
     
     if (expr.getCallee() == "@print" || expr.getCallee() == "@println") {
         if (expr.getArgs().size() < 1) {
@@ -399,83 +440,56 @@ llvm::Value* ExpressionCodeGen::codegenCall(CodeGen& context, CallExpr& expr) {
         
         auto printfFunc = module.getFunction("printf");
         if (!printfFunc) {
-            throw std::runtime_error("printf function not found");
+            auto* i32 = Type::getInt32Ty(llvmContext);
+            auto* i8Ptr = PointerType::get(Type::getInt8Ty(llvmContext), 0);
+            auto printfType = FunctionType::get(i32, {i8Ptr}, true);
+            printfFunc = Function::Create(printfType, Function::ExternalLinkage, "printf", &module);
         }
         
-        auto firstArg = expr.getArgs()[0]->codegen(context);
-
-        if (auto formatStrValue = dyn_cast<GlobalVariable>(firstArg)) {
-            if (auto formatStrConstant = dyn_cast<ConstantDataSequential>(formatStrValue->getInitializer())) {
-                std::string formatStr = formatStrConstant->getAsString().drop_back().str();
-                
-                if (formatStr.find('{') != std::string::npos) {
-                    auto formatSpecifiers = buildFormatSpecifiers(formatStr);
-
-                    if (expr.getCallee() == "@println") {
-                        formatSpecifiers += "\n";
-                    }
-                    
-                    auto exprStrings = extractExpressionStrings(formatStr);
-                    
-                    std::vector<Value*> args;
-                    auto formatSpecifierStr = builder.CreateGlobalStringPtr(formatSpecifiers);
-                    args.push_back(formatSpecifierStr);
-
-                    for (const auto& exprStr : exprStrings) {
-                        VariableExpr varExpr(exprStr);
-                        auto argValue = varExpr.codegen(context);
-                        auto stringValue = convertToString(context, argValue);
-                        args.push_back(stringValue);
-                    }
-                    
-                    return builder.CreateCall(printfFunc, args);
-                } else {
-                    std::vector<Value*> args;
-                    
-                    if (expr.getCallee() == "@println") {
-                        auto formatWithNewline = formatStr + "\n";
-                        auto formatStrPtr = builder.CreateGlobalStringPtr(formatWithNewline);
-                        args.push_back(formatStrPtr);
-                    } else {
-                        auto formatStrPtr = builder.CreateGlobalStringPtr(formatStr);
-                        args.push_back(formatStrPtr);
-                    }
-                    
-                    return builder.CreateCall(printfFunc, args);
+        if (auto* formatExpr = dynamic_cast<FormatStringExpr*>(expr.getArgs()[0].get())) {
+            auto result = formatExpr->codegen(context);
+            
+            if (expr.getCallee() == "@println") {
+                const std::string& formatStr = formatExpr->getFormatStr();
+                if (!formatStr.empty() && formatStr.back() != '\n') {
+                    auto newlineStr = builder.CreateGlobalStringPtr("\n");
+                    builder.CreateCall(printfFunc, {newlineStr});
                 }
             }
+            
+            return result;
         }
-        
-        std::vector<Value*> args;
+
+        std::vector<llvm::Value*> printfArgs;
 
         std::string formatStr;
         for (size_t i = 0; i < expr.getArgs().size(); i++) {
             if (i > 0) formatStr += " ";
             formatStr += "%s";
         }
-
+        
         if (expr.getCallee() == "@println") {
             formatStr += "\n";
         }
         
         auto formatStrPtr = builder.CreateGlobalStringPtr(formatStr);
-        args.push_back(formatStrPtr);
-
+        printfArgs.push_back(formatStrPtr);
+        
         for (size_t i = 0; i < expr.getArgs().size(); i++) {
             auto argValue = expr.getArgs()[i]->codegen(context);
-            auto stringValue = convertToString(context, argValue);
-            args.push_back(stringValue);
+            auto stringValue = AST::convertToString(context, argValue);
+            printfArgs.push_back(stringValue);
         }
         
-        return builder.CreateCall(printfFunc, args);
+        return builder.CreateCall(printfFunc, printfArgs);
     }
-
+    
     auto func = module.getFunction(expr.getCallee());
     if (!func) {
         throw std::runtime_error("Unknown function: " + expr.getCallee());
     }
-
-    std::vector<Value*> args;
+    
+    std::vector<llvm::Value*> args;
     for (auto& arg : expr.getArgs()) {
         args.push_back(arg->codegen(context));
     }
@@ -495,7 +509,7 @@ llvm::Value* ExpressionCodeGen::codegenCast(CodeGen& context, CastExpr& expr) {
     
     VarType targetType = expr.getTargetType();
     
-    VarType sourceType = inferSourceType(value, context);
+    VarType sourceType = AST::inferSourceType(value, context);
     if (!TypeBounds::isCastValid(sourceType, targetType)) {
         throw std::runtime_error("Invalid cast from " + TypeBounds::getTypeName(sourceType) + 
                                " to " + TypeBounds::getTypeName(targetType));
@@ -563,7 +577,7 @@ llvm::Value* ExpressionCodeGen::codegenCast(CodeGen& context, CastExpr& expr) {
     }
     
     if (targetType == VarType::STRING) {
-        return convertToString(context, value);
+        return AST::convertToString(context, value);
     }
     
     if (sourceLLVMType->isPointerTy() && targetType != VarType::STRING) {
@@ -573,4 +587,54 @@ llvm::Value* ExpressionCodeGen::codegenCast(CodeGen& context, CastExpr& expr) {
     throw std::runtime_error("Unsupported cast operation from " + 
                            TypeBounds::getTypeName(sourceType) + " to " + 
                            TypeBounds::getTypeName(targetType));
+}
+
+llvm::Value* ExpressionCodeGen::codegenFormatString(CodeGen& context, FormatStringExpr& expr) {
+    auto& module = context.getModule();
+    auto& builder = context.getBuilder();
+    auto& llvmContext = context.getContext();
+    
+    auto printfFunc = module.getFunction("printf");
+    if (!printfFunc) {
+        auto* i32 = Type::getInt32Ty(llvmContext);
+        auto* i8Ptr = PointerType::get(Type::getInt8Ty(llvmContext), 0);
+        auto printfType = FunctionType::get(i32, {i8Ptr}, true);
+        printfFunc = Function::Create(printfType, Function::ExternalLinkage, "printf", &module);
+    }
+    
+    std::string formatSpecifiers;
+    size_t lastPos = 0;
+    const std::string& formatStr = expr.getFormatStr();
+    
+    size_t pos = 0;
+    while ((pos = formatStr.find('{', lastPos)) != std::string::npos) {
+        if (pos > lastPos) {
+            formatSpecifiers += formatStr.substr(lastPos, pos - lastPos);
+        }
+        
+        size_t endPos = formatStr.find('}', pos);
+        if (endPos == std::string::npos) {
+            throw std::runtime_error("Unclosed '{' in format string");
+        }
+        
+        formatSpecifiers += "%s";
+        
+        lastPos = endPos + 1;
+    }
+    
+    if (lastPos < formatStr.length()) {
+        formatSpecifiers += formatStr.substr(lastPos);
+    }
+
+    std::vector<llvm::Value*> printfArgs;
+    auto formatStrPtr = builder.CreateGlobalStringPtr(formatSpecifiers);
+    printfArgs.push_back(formatStrPtr);
+    
+    for (auto& expr : expr.getExpressions()) {
+        auto exprValue = expr->codegen(context);
+        auto stringValue = AST::convertToString(context, exprValue);
+        printfArgs.push_back(stringValue);
+    }
+
+    return builder.CreateCall(printfFunc, printfArgs);
 }

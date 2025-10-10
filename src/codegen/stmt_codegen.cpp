@@ -2,6 +2,7 @@
 #include "codegen.h"
 #include "ast/ast.h"
 #include <llvm/IR/Verifier.h>
+#include <llvm/IR/BasicBlock.h>
 #include "codegen/bounds.h"
 
 using namespace llvm;
@@ -18,21 +19,15 @@ llvm::Value* StatementCodeGen::codegenVariableDecl(CodeGen& context, VariableDec
     }
     
     auto& builder = context.getBuilder();
-    auto currentBlock = builder.GetInsertBlock();
-    if (!currentBlock) {
-        throw std::runtime_error("No current basic block");
-    }
-
-    auto currentFunction = currentBlock->getParent();
+    
+    auto currentFunction = builder.GetInsertBlock()->getParent();
     if (!currentFunction) {
         throw std::runtime_error("No current function");
     }
     
-    auto entryBlock = &currentFunction->getEntryBlock();
-    builder.SetInsertPoint(entryBlock);
-    
-    auto alloca = builder.CreateAlloca(varType, nullptr, decl.getName());
-    builder.SetInsertPoint(currentBlock);
+    IRBuilder<> entryBuilder(&currentFunction->getEntryBlock(), 
+                           currentFunction->getEntryBlock().begin());
+    auto alloca = entryBuilder.CreateAlloca(varType, nullptr, decl.getName());
 
     if (decl.getValue()) {
         auto value = decl.getValue()->codegen(context);
@@ -153,26 +148,20 @@ llvm::Value* StatementCodeGen::codegenVariableDecl(CodeGen& context, VariableDec
 
     return alloca;
 }
-
 llvm::Value* StatementCodeGen::codegenAssignment(CodeGen& context, AssignmentStmt& stmt) {
-    auto& namedValues = context.getNamedValues();
-    auto var = namedValues[stmt.getName()];
+    auto var = context.lookupVariable(stmt.getName());
     if (!var) {
         throw std::runtime_error("Unknown variable: " + stmt.getName());
     }
-    
-    auto& constVariables = context.getConstVariables();
-    if (constVariables.find(stmt.getName()) != constVariables.end()) {
+
+    if (context.isVariableConst(stmt.getName())) {
         throw std::runtime_error("Cannot assign to const variable: " + stmt.getName());
     }
 
-    auto& varTypes = context.getVariableTypes();
-    auto it = varTypes.find(stmt.getName());
-    if (it == varTypes.end()) {
+    VarType varType = context.lookupVariableType(stmt.getName());
+    if (varType == VarType::VOID) {
         throw std::runtime_error("Unknown variable type for: " + stmt.getName());
     }
-
-    VarType varType = it->second;
     
     if (varType == VarType::UINT0) {
         throw std::runtime_error("Cannot assign to uint0 — value is always 0");
@@ -219,30 +208,93 @@ llvm::Value* StatementCodeGen::codegenExprStmt(CodeGen& context, ExprStmt& stmt)
 }
 
 llvm::Value* StatementCodeGen::codegenProgram(CodeGen& context, Program& program) {
-    auto& llvmContext = context.getContext();
     auto& builder = context.getBuilder();
+    auto& module = context.getModule();
+    auto& llvmContext = context.getContext();
     
-    auto mainType = FunctionType::get(Type::getInt32Ty(llvmContext), false);
-    auto mainFunc = Function::Create(mainType, Function::ExternalLinkage, "main", &context.getModule());
+    auto mainFuncType = llvm::FunctionType::get(
+        llvm::Type::getInt32Ty(llvmContext), 
+        false
+    );
+    auto mainFunc = llvm::Function::Create(
+        mainFuncType,
+        llvm::Function::ExternalLinkage,
+        "main",
+        &module
+    );
     
-    auto block = BasicBlock::Create(llvmContext, "entry", mainFunc);
-    builder.SetInsertPoint(block);
+    auto entryBlock = llvm::BasicBlock::Create(llvmContext, "entry", mainFunc);
+    builder.SetInsertPoint(entryBlock);
     
-    try {
-        for (auto& stmt : program.getStatements()) {
-            stmt->codegen(context);
-        }
-    } catch (const std::runtime_error& e) {
-        builder.CreateRet(ConstantInt::get(Type::getInt32Ty(llvmContext), 1));
-        verifyFunction(*mainFunc);
-        throw e;
+    for (auto& stmt : program.getStatements()) {
+        stmt->codegen(context);
     }
-
-    builder.CreateRet(ConstantInt::get(Type::getInt32Ty(llvmContext), 0));
     
-    if (verifyFunction(*mainFunc, &llvm::errs())) {
+    builder.CreateRet(llvm::ConstantInt::get(llvmContext, llvm::APInt(32, 0)));
+    
+    if (llvm::verifyFunction(*mainFunc, &llvm::errs())) {
         throw std::runtime_error("Generated function failed verification");
     }
     
     return mainFunc;
+}
+
+llvm::Value* StatementCodeGen::codegenBlockStmt(CodeGen& context, BlockStmt& stmt) {
+    auto& builder = context.getBuilder();
+
+    for (auto& stmt : stmt.getStatements()) {
+        stmt->codegen(context);
+    }
+    
+    return nullptr;
+}
+
+llvm::Value* StatementCodeGen::codegenIfStmt(CodeGen& context, IfStmt& stmt) {
+    auto& builder = context.getBuilder();
+    auto& llvmContext = context.getContext();
+    
+    auto condValue = stmt.getCondition()->codegen(context);
+    
+    if (!condValue->getType()->isIntegerTy(1)) {
+        if (condValue->getType()->isIntegerTy()) {
+            condValue = builder.CreateICmpNE(condValue, 
+                ConstantInt::get(condValue->getType(), 0));
+        } else {
+            throw std::runtime_error("If condition must be a boolean or integer type");
+        }
+    }
+    
+    auto currentFunction = builder.GetInsertBlock()->getParent();
+    
+    auto thenBlock = BasicBlock::Create(llvmContext, "then", currentFunction);
+    auto mergeBlock = BasicBlock::Create(llvmContext, "ifcont");
+    BasicBlock* elseBlock;
+    
+    if (stmt.getElseBranch()) {
+        elseBlock = BasicBlock::Create(llvmContext, "else");
+    } else {
+        elseBlock = mergeBlock;
+    }
+    
+    builder.CreateCondBr(condValue, thenBlock, elseBlock);
+
+    builder.SetInsertPoint(thenBlock);
+    stmt.getThenBranch()->codegen(context);
+    if (!builder.GetInsertBlock()->getTerminator()) {
+        builder.CreateBr(mergeBlock);
+    }
+    
+    if (stmt.getElseBranch()) {
+        currentFunction->insert(currentFunction->end(), elseBlock);
+        builder.SetInsertPoint(elseBlock);
+        stmt.getElseBranch()->codegen(context);
+        if (!builder.GetInsertBlock()->getTerminator()) {
+            builder.CreateBr(mergeBlock);
+        }
+    }
+    
+    currentFunction->insert(currentFunction->end(), mergeBlock);
+    builder.SetInsertPoint(mergeBlock);
+    
+    return nullptr;
 }

@@ -1,8 +1,10 @@
 #include "bounds.h"
 #include "ast/ast.h"
 
+/* Using the AST namespace */
 using namespace AST;
 
+/* Check if the value is within type bounds */
 bool TypeBounds::checkBounds(VarType type, const BigInt& value) {
     switch (type) {
         case VarType::BOOL:
@@ -48,6 +50,7 @@ bool TypeBounds::checkBounds(VarType type, const BigInt& value) {
     }
 }
 
+/* Get the range of a type as a string */
 std::string TypeBounds::getTypeRange(VarType type) {
     switch (type) {
         case VarType::BOOL:
@@ -93,6 +96,7 @@ std::string TypeBounds::getTypeRange(VarType type) {
     }
 }
 
+/* Get the type name as a string */
 std::string TypeBounds::getTypeName(VarType type) {
     switch (type) {
         case VarType::BOOL: return "bool";
@@ -121,6 +125,7 @@ std::string TypeBounds::getTypeName(VarType type) {
     }
 }
 
+/* Check if a cast from one type to another is valid */
 bool TypeBounds::isCastValid(VarType fromType, VarType toType) {
     if (toType == VarType::STRING) {
         return true;
@@ -149,10 +154,12 @@ bool TypeBounds::isCastValid(VarType fromType, VarType toType) {
     return false;
 }
 
+/* Check if the type is numeric */
 bool TypeBounds::isNumericType(VarType type) {
     return isIntegerType(type) || isFloatType(type) || type == VarType::BOOL;
 }
 
+/* Check if the type is an integer type */
 bool TypeBounds::isIntegerType(VarType type) {
     return (type == VarType::INT4 || type == VarType::INT8 || type == VarType::INT12 || 
             type == VarType::INT16 || type == VarType::INT24 || type == VarType::INT32 || 
@@ -162,10 +169,12 @@ bool TypeBounds::isIntegerType(VarType type) {
             type == VarType::UINT48 || type == VarType::UINT64 || type == VarType::UINT0);
 }
 
+/* Check if the type is a floating point type */
 bool TypeBounds::isFloatType(VarType type) {
     return (type == VarType::FLOAT32 || type == VarType::FLOAT64);
 }
 
+/* Get the bit width of the type */
 size_t TypeBounds::getTypeBitWidth(VarType type) {
     switch (type) {
         case VarType::BOOL: return 1;
@@ -184,6 +193,7 @@ size_t TypeBounds::getTypeBitWidth(VarType type) {
     }
 }
 
+/* Check if bounds checking is needed when casting types */
 bool TypeBounds::requiresBoundsCheck(VarType fromType, VarType toType) {
     if (fromType == toType) return false;
     if (toType == VarType::STRING || fromType == VarType::STRING) return false;
@@ -208,6 +218,7 @@ bool TypeBounds::requiresBoundsCheck(VarType fromType, VarType toType) {
     return false;
 }
 
+/* Check if the type is unsigned */
 bool TypeBounds::isUnsignedType(VarType type) {
     return (type == VarType::UINT4 || type == VarType::UINT8 || 
             type == VarType::UINT12 || type == VarType::UINT16 ||

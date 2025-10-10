@@ -1,48 +1,45 @@
-CXX = g++
-CXXFLAGS = -std=c++17 -Isrc -I/usr/include/llvm-18 -I/usr/include/llvm -w
-LDFLAGS = -L/usr/lib/llvm-18/lib -lLLVM-18 -ltommath
-
-SRC_DIR = src
+CXX       = g++
+SRC_DIR   = src
 BUILD_DIR = build
-BIN_DIR = $(BUILD_DIR)/bin
+BIN_DIR   = $(BUILD_DIR)/bin
+TARGET    = $(BIN_DIR)/summit
 
-SOURCES = $(wildcard $(SRC_DIR)/*.cpp) \
-          $(wildcard $(SRC_DIR)/*/*.cpp)
-OBJS = $(SOURCES:$(SRC_DIR)/%.cpp=$(BUILD_DIR)/%.o)
+# Detect number of CPU cores for parallel LTO
+NUM_CORES := $(shell nproc)
 
-TARGET = $(BIN_DIR)/summit
+CXXFLAGS  = -std=c++17 -Os -flto=$(NUM_CORES) -fdata-sections -ffunction-sections \
+            -fno-unwind-tables -fno-asynchronous-unwind-tables -DNDEBUG \
+            -Isrc -I/usr/include/llvm-18 -I/usr/include/llvm \
+            -fmerge-all-constants -fno-stack-protector \
+            -fno-math-errno -fno-ident -w
 
-.PHONY: all clean test
+LDFLAGS   = -L/usr/lib/llvm-18/lib \
+            -lLLVM-18 -ltommath \
+            -Wl,--gc-sections,--as-needed,--strip-all \
+            -flto=$(NUM_CORES) -Wl,-O3
+
+SOURCES   = $(shell find $(SRC_DIR) -name '*.cpp')
+OBJS      = $(SOURCES:$(SRC_DIR)/%.cpp=$(BUILD_DIR)/%.o)
+
+.PHONY: all clean strip-upx
 
 all: $(TARGET)
+	@echo "Stripping and compressing binary..."
+	@$(MAKE) strip-upx -s
 
 $(TARGET): $(OBJS) | $(BIN_DIR)
-	$(CXX) $(OBJS) $(LDFLAGS) -o $(TARGET)
+	$(CXX) $(OBJS) $(LDFLAGS) -o $@
 
-$(BUILD_DIR)/%.o: $(SRC_DIR)/%.cpp | $(BUILD_DIR)
+$(BUILD_DIR)/%.o: $(SRC_DIR)/%.cpp
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
-$(BUILD_DIR):
-	@mkdir -p $(BUILD_DIR)
-
 $(BIN_DIR):
-	@mkdir -p $(BIN_DIR)
+	@mkdir -p $@
+
+strip-upx:
+	@strip --strip-unneeded $(TARGET) || true
+	@upx --best --lzma --no-progress $(TARGET) >/dev/null 2>&1 || true
 
 clean:
 	rm -rf $(BUILD_DIR)
-
-$(BUILD_DIR)/ast: | $(BUILD_DIR)
-	@mkdir -p $@
-
-$(BUILD_DIR)/codegen: | $(BUILD_DIR)
-	@mkdir -p $@
-
-$(BUILD_DIR)/lexer: | $(BUILD_DIR)
-	@mkdir -p $@
-
-$(BUILD_DIR)/parser: | $(BUILD_DIR)
-	@mkdir -p $@
-
-$(BUILD_DIR)/utils: | $(BUILD_DIR)
-	@mkdir -p $@

@@ -1,45 +1,32 @@
-#include "lexer/lexer.h"
+#include "lexer.h"
 #include <cctype>
-#include <unordered_map>
 #include <stdexcept>
 
 using namespace std;
 
-static unordered_map<string, TokenType> keywords = {
-    {"var", TokenType::VAR},
-    {"const", TokenType::CONST},
-    {"bool", TokenType::BOOL},
-    {"true", TokenType::TRUE},
-    {"false", TokenType::FALSE},
-    {"as", TokenType::AS},
-    {"int4", TokenType::INT4},
-    {"int8", TokenType::INT8},
-    {"int12", TokenType::INT12},
-    {"int16", TokenType::INT16},
-    {"int24", TokenType::INT24},
-    {"int32", TokenType::INT32},
-    {"int48", TokenType::INT48},
-    {"int64", TokenType::INT64},
-    {"uint4", TokenType::UINT4},
-    {"uint8", TokenType::UINT8},
-    {"uint12", TokenType::UINT12},
-    {"uint16", TokenType::UINT16},
-    {"uint24", TokenType::UINT24},
-    {"uint32", TokenType::UINT32},
-    {"uint48", TokenType::UINT48},
-    {"uint64", TokenType::UINT64},
-    {"uint0", TokenType::UINT0},
-    {"float32", TokenType::FLOAT32},
-    {"float64", TokenType::FLOAT64},
-    {"str", TokenType::STRING}
+unordered_map<string, TokenType> Lexer::keywords = {
+    {"var", TokenType::VAR}, {"const", TokenType::CONST}, {"as", TokenType::AS},
+    {"bool", TokenType::BOOL}, {"true", TokenType::TRUE}, {"false", TokenType::FALSE},
+    {"if", TokenType::IF}, {"then", TokenType::THEN}, {"else", TokenType::ELSE},
+    {"elseif", TokenType::ELSEIF}, {"end", TokenType::END}, {"and", TokenType::AND},
+    {"or", TokenType::OR}, {"not", TokenType::NOT},
+    
+    {"int4", TokenType::INT4}, {"int8", TokenType::INT8}, {"int12", TokenType::INT12},
+    {"int16", TokenType::INT16}, {"int24", TokenType::INT24}, {"int32", TokenType::INT32},
+    {"int48", TokenType::INT48}, {"int64", TokenType::INT64},
+    
+    {"uint0", TokenType::UINT0}, {"uint4", TokenType::UINT4}, {"uint8", TokenType::UINT8},
+    {"uint12", TokenType::UINT12}, {"uint16", TokenType::UINT16}, {"uint24", TokenType::UINT24},
+    {"uint32", TokenType::UINT32}, {"uint48", TokenType::UINT48}, {"uint64", TokenType::UINT64},
+    
+    {"float32", TokenType::FLOAT32}, {"float64", TokenType::FLOAT64}, {"str", TokenType::STRING}
 };
 
 Lexer::Lexer(const string& input) 
     : input(input), position(0), line(1), column(1) {}
 
 char Lexer::peek() {
-    if (position >= input.length()) return '\0';
-    return input[position];
+    return position >= input.length() ? '\0' : input[position];
 }
 
 char Lexer::advance() {
@@ -55,18 +42,14 @@ char Lexer::advance() {
 }
 
 void Lexer::skipWhitespace() {
-    while (isspace(peek())) {
-        advance();
-    }
+    while (isspace(peek())) advance();
 }
 
 void Lexer::skipComment() {
     if (peek() == '/') {
         advance();
         if (peek() == '/') {
-            while (peek() != '\n' && peek() != '\0') {
-                advance();
-            }
+            while (peek() != '\n' && peek() != '\0') advance();
         } else if (peek() == '*') {
             advance();
             while (true) {
@@ -91,45 +74,58 @@ Token Lexer::readNumber() {
     string number;
     size_t startLine = line, startCol = column;
     bool isFloat = false;
-    bool hasExponent = false;
     
-    while (isdigit(peek())) {
-        number += advance();
+    if (peek() == '0' && (input[position + 1] == 'b' || input[position + 1] == 'B')) {
+        advance(); advance();
+        number = "0b";
+        while (peek() == '0' || peek() == '1' || peek() == '_') {
+            if (peek() != '_') number += advance();
+            else advance();
+        }
+        if (number.length() <= 2) throw runtime_error("Invalid binary literal: " + number);
+        return Token(TokenType::NUMBER, number, startLine, startCol);
+    }
+    
+    if (peek() == '0' && (input[position + 1] == 'x' || input[position + 1] == 'X')) {
+        advance(); advance();
+        number = "0x";
+        while (isxdigit(peek()) || peek() == '_') {
+            if (peek() != '_') number += advance();
+            else advance();
+        }
+        if (number.length() <= 2) throw runtime_error("Invalid hex literal: " + number);
+        return Token(TokenType::NUMBER, number, startLine, startCol);
+    }
+
+    while (isdigit(peek()) || peek() == '_') {
+        if (peek() != '_') number += advance();
+        else advance();
     }
 
     if (peek() == '.') {
         isFloat = true;
         number += advance();
-        
-        while (isdigit(peek())) {
-            number += advance();
+        while (isdigit(peek()) || peek() == '_') {
+            if (peek() != '_') number += advance();
+            else advance();
         }
     }
     
     if (peek() == 'e' || peek() == 'E') {
         isFloat = true;
-        hasExponent = true;
         number += advance();
-
-        if (peek() == '+' || peek() == '-') {
-            number += advance();
-        }
-        
-        while (isdigit(peek())) {
-            number += advance();
+        if (peek() == '+' || peek() == '-') number += advance();
+        while (isdigit(peek()) || peek() == '_') {
+            if (peek() != '_') number += advance();
+            else advance();
         }
     }
     
     if (isFloat) {
-        if (number.empty() || 
-            number == "." || 
-            number.back() == 'e' || 
-            number.back() == 'E' ||
-            number.back() == '+' || 
-            number.back() == '-') {
+        if (number.empty() || number == "." || number.back() == 'e' || 
+            number.back() == 'E' || number.back() == '+' || number.back() == '-') {
             throw runtime_error("Invalid float literal: " + number);
         }
-        
         return Token(TokenType::FLOAT_LITERAL, number, startLine, startCol);
     } else {
         return Token(TokenType::NUMBER, number, startLine, startCol);
@@ -139,7 +135,6 @@ Token Lexer::readNumber() {
 Token Lexer::readString() {
     string str;
     size_t startLine = line, startCol = column;
-    
     advance();
     
     while (peek() != '"' && peek() != '\0') {
@@ -158,18 +153,14 @@ Token Lexer::readString() {
         }
     }
     
-    if (peek() != '"') {
-        throw runtime_error("Unterminated string literal");
-    }
+    if (peek() != '"') throw runtime_error("Unterminated string literal");
     advance();
-    
     return Token(TokenType::STRING_LITERAL, str, startLine, startCol);
 }
 
 Token Lexer::readBacktickString() {
     string str;
     size_t startLine = line, startCol = column;
-    
     advance();
     
     while (peek() != '`' && peek() != '\0') {
@@ -190,11 +181,8 @@ Token Lexer::readBacktickString() {
         }
     }
     
-    if (peek() != '`') {
-        throw runtime_error("Unterminated backtick string literal");
-    }
+    if (peek() != '`') throw runtime_error("Unterminated backtick string literal");
     advance();
-    
     return Token(TokenType::BACKTICK_STRING, str, startLine, startCol);
 }
 
@@ -202,50 +190,35 @@ Token Lexer::readIdentifier() {
     string ident;
     size_t startLine = line, startCol = column;
     
-    while (isalnum(peek()) || peek() == '_') {
-        ident += advance();
-    }
+    while (isalnum(peek()) || peek() == '_') ident += advance();
     
     auto it = keywords.find(ident);
-    if (it != keywords.end()) {
-        return Token(it->second, ident, startLine, startCol);
-    }
-    
-    return Token(TokenType::IDENTIFIER, ident, startLine, startCol);
+    return it != keywords.end() 
+        ? Token(it->second, ident, startLine, startCol)
+        : Token(TokenType::IDENTIFIER, ident, startLine, startCol);
 }
 
 Token Lexer::readBuiltin() {
     string builtin;
     size_t startLine = line, startCol = column;
-
     advance();
     
     if (!isalpha(peek()) && peek() != '_') {
         throw runtime_error("Expected identifier after '@'");
     }
 
-    while (isalnum(peek()) || peek() == '_') {
-        builtin += advance();
-    }
-
-    builtin = "@" + builtin;
-
-    return Token(TokenType::BUILTIN, builtin, startLine, startCol);
+    while (isalnum(peek()) || peek() == '_') builtin += advance();
+    return Token(TokenType::BUILTIN, "@" + builtin, startLine, startCol);
 }
-
 
 vector<Token> Lexer::tokenize() {
     vector<Token> tokens;
     
     while (position < input.length()) {
         skipWhitespace();
-
-        if (peek() == '/') {
-            char nextChar = input[position + 1];
-            if (nextChar == '/' || nextChar == '*') {
-                skipComment();
-                continue;
-            }
+        if (peek() == '/' && (input[position + 1] == '/' || input[position + 1] == '*')) {
+            skipComment();
+            continue;
         }
 
         char c = peek();
@@ -265,70 +238,50 @@ vector<Token> Lexer::tokenize() {
             tokens.push_back(readBuiltin());
         } else {
             switch (c) {
-                case '=':
-                    tokens.push_back(Token(TokenType::EQUALS, "=", currentLine, currentCol));
-                    advance();
-                    break;
-                case '+':
-                    tokens.push_back(Token(TokenType::PLUS, "+", currentLine, currentCol));
-                    advance();
-                    break;
-                case '-':
-                    tokens.push_back(Token(TokenType::MINUS, "-", currentLine, currentCol));
-                    advance();
-                    break;
-                case '*':
-                    tokens.push_back(Token(TokenType::STAR, "*", currentLine, currentCol));
-                    advance();
-                    break;
-                case '/':
-                    tokens.push_back(Token(TokenType::SLASH, "/", currentLine, currentCol));
-                    advance();
-                    break;
-                case ':':
-                    tokens.push_back(Token(TokenType::COLON, ":", currentLine, currentCol));
-                    advance();
-                    break;
-                case ';':
-                    tokens.push_back(Token(TokenType::SEMICOLON, ";", currentLine, currentCol));
-                    advance();
-                    break;
-                case '(':
-                    tokens.push_back(Token(TokenType::LPAREN, "(", currentLine, currentCol));
-                    advance();
-                    break;
-                case ')':
-                    tokens.push_back(Token(TokenType::RPAREN, ")", currentLine, currentCol));
-                    advance();
-                    break;
-                case ',':
-                    tokens.push_back(Token(TokenType::COMMA, ",", currentLine, currentCol));
-                    advance();
-                    break;
-                case '{':
-                    tokens.push_back(Token(TokenType::LBRACE, "{", currentLine, currentCol));
-                    advance();
-                    break;
-                case '}':
-                    tokens.push_back(Token(TokenType::RBRACE, "}", currentLine, currentCol));
-                    advance();
-                    break;
-                case '.':
-                    tokens.push_back(Token(TokenType::DOT, ".", currentLine, currentCol));
-                    advance();
-                    break;
-                case '<':
-                    tokens.push_back(Token(TokenType::LESS, "<", currentLine, currentCol));
-                    advance();
-                    break;
-                case '>':
-                    tokens.push_back(Token(TokenType::GREATER, ">", currentLine, currentCol));
-                    advance();
-                    break;
-                default:
-                    tokens.push_back(Token(TokenType::UNKNOWN, string(1, c), currentLine, currentCol));
-                    advance();
-                    break;
+                case '=': advance(); tokens.push_back(peek() == '=' 
+                    ? (advance(), Token(TokenType::EQUAL_EQUAL, "==", currentLine, currentCol))
+                    : Token(TokenType::EQUALS, "=", currentLine, currentCol)); break;
+                case '!': advance(); tokens.push_back(peek() == '=' 
+                    ? (advance(), Token(TokenType::NOT_EQUAL, "!=", currentLine, currentCol))
+                    : Token(TokenType::EXCLAMATION, "!", currentLine, currentCol)); break;
+                case '<': advance(); 
+                    if (peek() == '=') {
+                        advance(); tokens.push_back(Token(TokenType::LESS_EQUAL, "<=", currentLine, currentCol));
+                    } else if (peek() == '<') {
+                        advance(); tokens.push_back(Token(TokenType::LEFT_SHIFT, "<<", currentLine, currentCol));
+                    } else {
+                        tokens.push_back(Token(TokenType::LESS, "<", currentLine, currentCol));
+                    } break;
+                case '>': advance();
+                    if (peek() == '=') {
+                        advance(); tokens.push_back(Token(TokenType::GREATER_EQUAL, ">=", currentLine, currentCol));
+                    } else if (peek() == '>') {
+                        advance(); tokens.push_back(Token(TokenType::RIGHT_SHIFT, ">>", currentLine, currentCol));
+                    } else {
+                        tokens.push_back(Token(TokenType::GREATER, ">", currentLine, currentCol));
+                    } break;
+                case '&': advance(); tokens.push_back(peek() == '&' 
+                    ? (advance(), Token(TokenType::AND_AND, "&&", currentLine, currentCol))
+                    : Token(TokenType::AMPERSAND, "&", currentLine, currentCol)); break;
+                case '|': advance(); tokens.push_back(peek() == '|' 
+                    ? (advance(), Token(TokenType::OR_OR, "||", currentLine, currentCol))
+                    : Token(TokenType::PIPE, "|", currentLine, currentCol)); break;
+                case '^': tokens.push_back(Token(TokenType::CARET, "^", currentLine, currentCol)); advance(); break;
+                case '~': tokens.push_back(Token(TokenType::TILDE, "~", currentLine, currentCol)); advance(); break;
+                case '%': tokens.push_back(Token(TokenType::PERCENT, "%", currentLine, currentCol)); advance(); break;
+                case '+': tokens.push_back(Token(TokenType::PLUS, "+", currentLine, currentCol)); advance(); break;
+                case '-': tokens.push_back(Token(TokenType::MINUS, "-", currentLine, currentCol)); advance(); break;
+                case '*': tokens.push_back(Token(TokenType::STAR, "*", currentLine, currentCol)); advance(); break;
+                case '/': tokens.push_back(Token(TokenType::SLASH, "/", currentLine, currentCol)); advance(); break;
+                case ':': tokens.push_back(Token(TokenType::COLON, ":", currentLine, currentCol)); advance(); break;
+                case ';': tokens.push_back(Token(TokenType::SEMICOLON, ";", currentLine, currentCol)); advance(); break;
+                case '(': tokens.push_back(Token(TokenType::LPAREN, "(", currentLine, currentCol)); advance(); break;
+                case ')': tokens.push_back(Token(TokenType::RPAREN, ")", currentLine, currentCol)); advance(); break;
+                case ',': tokens.push_back(Token(TokenType::COMMA, ",", currentLine, currentCol)); advance(); break;
+                case '{': tokens.push_back(Token(TokenType::LBRACE, "{", currentLine, currentCol)); advance(); break;
+                case '}': tokens.push_back(Token(TokenType::RBRACE, "}", currentLine, currentCol)); advance(); break;
+                case '.': tokens.push_back(Token(TokenType::DOT, ".", currentLine, currentCol)); advance(); break;
+                default: tokens.push_back(Token(TokenType::UNKNOWN, string(1, c), currentLine, currentCol)); advance(); break;
             }
         }
     }

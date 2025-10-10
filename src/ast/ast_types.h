@@ -30,6 +30,26 @@ namespace AST {
         ADD,
         SUBTRACT,
         MULTIPLY,
-        DIVIDE
+        DIVIDE,
+        MODULUS,
+        GREATER,
+        LESS,
+        GREATER_EQUAL,
+        LESS_EQUAL,
+        EQUAL,
+        NOT_EQUAL,
+        LOGICAL_AND,
+        LOGICAL_OR,
+        BITWISE_AND,
+        BITWISE_OR,
+        BITWISE_XOR,
+        LEFT_SHIFT,
+        RIGHT_SHIFT
+    };
+    
+    enum class UnaryOp {
+        LOGICAL_NOT,
+        NEGATE,
+        BITWISE_NOT
     };
 }

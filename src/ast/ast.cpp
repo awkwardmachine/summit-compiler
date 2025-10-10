@@ -8,6 +8,10 @@ llvm::Value* StringExpr::codegen(::CodeGen& context) {
     return context.codegen(*this);
 }
 
+llvm::Value* FormatStringExpr::codegen(::CodeGen& context) {
+    return context.codegen(*this);
+}
+
 llvm::Value* NumberExpr::codegen(::CodeGen& context) {
     return context.codegen(*this);
 }
@@ -28,11 +32,23 @@ llvm::Value* CallExpr::codegen(::CodeGen& context) {
     return context.codegen(*this);
 }
 
+llvm::Value* UnaryExpr::codegen(::CodeGen& context) {
+    return context.codegen(*this);
+}
+
 llvm::Value* VariableDecl::codegen(::CodeGen& context) {
     return context.codegen(*this);
 }
 
 llvm::Value* AssignmentStmt::codegen(::CodeGen& context) {
+    return context.codegen(*this);
+}
+
+llvm::Value* BlockStmt::codegen(::CodeGen& context) {
+    return context.codegen(*this);
+}
+
+llvm::Value* IfStmt::codegen(::CodeGen& context) {
     return context.codegen(*this);
 }
 

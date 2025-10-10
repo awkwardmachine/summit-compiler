@@ -4,10 +4,10 @@
 #include "utils/error_utils.h"
 #include <vector>
 #include <memory>
-#include <stdexcept>
 #include <string>
 
 class Parser {
+private:
     std::vector<Token> tokens;
     size_t current;
     std::string source;
@@ -22,11 +22,15 @@ class Parser {
     std::unique_ptr<AST::Expr> parseExpression();
     std::unique_ptr<AST::Expr> parsePrimary();
     std::unique_ptr<AST::Expr> parseBinaryExpression(int minPrecedence);
-    std::unique_ptr<AST::Expr> parseCallExpression();
     std::unique_ptr<AST::Expr> parseCastExpression();
+    std::unique_ptr<AST::Expr> parseUnaryExpression();
+    std::unique_ptr<AST::Stmt> parseIfStatement();
+    std::unique_ptr<AST::Stmt> parseBlock();
+    std::unique_ptr<AST::Stmt> parseElseIfChain();
 
     std::unique_ptr<AST::Expr> parseExpressionFromString(const std::string& exprStr);
     std::vector<std::unique_ptr<AST::Expr>> extractExpressionsFromFormat(const std::string& formatStr);
+    std::string buildFormatSpecifiers(const std::string& formatStr);
 
     std::unique_ptr<AST::Stmt> parseStatement();
     std::unique_ptr<AST::Stmt> parseVariableDeclaration();

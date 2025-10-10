@@ -23,8 +23,6 @@ inline std::string quoted(const std::string& s) {
 
 inline std::string boolStr(bool b) { return b ? "true" : "false"; }
 
-// ------------------- Base classes -------------------
-
 class Expr {
 public:
     virtual ~Expr() = default;
@@ -39,8 +37,6 @@ public:
     virtual std::string toString(int indent = 0) const = 0;
 };
 
-// ------------------- Expression nodes -------------------
-
 class StringExpr : public Expr {
     std::string value;
 public:
@@ -51,16 +47,83 @@ public:
         return indentStr(indent) + "StringExpr: " + quoted(value);
     }
 };
-
 class NumberExpr : public Expr {
     BigInt value;
 public:
     NumberExpr(const BigInt& val) : value(val) {}
-    NumberExpr(const std::string& str) : value(str) {}
+    NumberExpr(const std::string& str) {
+        if (str.length() >= 2 && str.substr(0, 2) == "0b") {
+            std::string binStr = str.substr(2);
+            binStr.erase(std::remove(binStr.begin(), binStr.end(), '_'), binStr.end());
+            
+            if (binStr.empty()) {
+                throw std::runtime_error("Invalid binary literal: " + str);
+            }
+            
+            uint64_t decimalValue = 0;
+            for (char c : binStr) {
+                if (c != '0' && c != '1') {
+                    throw std::runtime_error("Invalid binary digit: " + std::string(1, c));
+                }
+                decimalValue = (decimalValue << 1) | (c - '0');
+            }
+            
+            value = BigInt(std::to_string(decimalValue));
+        }
+        else if (str.length() >= 2 && str.substr(0, 2) == "0x") {
+            std::string hexStr = str.substr(2);
+            hexStr.erase(std::remove(hexStr.begin(), hexStr.end(), '_'), hexStr.end());
+            
+            if (hexStr.empty()) {
+                throw std::runtime_error("Invalid hex literal: " + str);
+            }
+            
+            uint64_t decimalValue = 0;
+            for (char c : hexStr) {
+                int digit;
+                if (c >= '0' && c <= '9') digit = c - '0';
+                else if (c >= 'a' && c <= 'f') digit = c - 'a' + 10;
+                else if (c >= 'A' && c <= 'F') digit = c - 'A' + 10;
+                else throw std::runtime_error("Invalid hex digit: " + std::string(1, c));
+                
+                decimalValue = (decimalValue << 4) | digit;
+            }
+            
+            value = BigInt(std::to_string(decimalValue));
+        }
+        else {
+            std::string decStr = str;
+            decStr.erase(std::remove(decStr.begin(), decStr.end(), '_'), decStr.end());
+            value = BigInt(decStr);
+        }
+    }
+    
     llvm::Value* codegen(::CodeGen& context) override;
     const BigInt& getValue() const { return value; }
     std::string toString(int indent = 0) const override {
         return indentStr(indent) + "NumberExpr: " + value.toString();
+    }
+};
+
+class FormatStringExpr : public Expr {
+    std::string formatStr;
+    std::vector<std::unique_ptr<Expr>> expressions;
+public:
+    FormatStringExpr(std::string formatStr, std::vector<std::unique_ptr<Expr>> exprs)
+        : formatStr(std::move(formatStr)), expressions(std::move(exprs)) {}
+
+    llvm::Value* codegen(::CodeGen& context) override;
+    const std::string& getFormatStr() const { return formatStr; }
+    const std::vector<std::unique_ptr<Expr>>& getExpressions() const { return expressions; }
+    
+    std::string toString(int indent = 0) const override {
+        std::ostringstream oss;
+        oss << indentStr(indent) << "FormatStringExpr: " << quoted(formatStr) 
+            << " with " << expressions.size() << " expression(s)\n";
+        for (const auto& expr : expressions) {
+            oss << expr->toString(indent + 1) << "\n";
+        }
+        return oss.str();
     }
 };
 
@@ -158,8 +221,6 @@ public:
     }
 };
 
-// ------------------- Statement nodes -------------------
-
 class VariableDecl : public Stmt {
     std::string name;
     VarType type;
@@ -200,6 +261,74 @@ public:
     }
 };
 
+class BlockStmt : public Stmt {
+    std::vector<std::unique_ptr<Stmt>> statements;
+public:
+    void addStatement(std::unique_ptr<Stmt> stmt) {
+        statements.push_back(std::move(stmt));
+    }
+    
+    llvm::Value* codegen(::CodeGen& context) override;
+    
+    const std::vector<std::unique_ptr<Stmt>>& getStatements() const { return statements; }
+    
+    std::string toString(int indent = 0) const override {
+        std::ostringstream oss;
+        oss << indentStr(indent) << "BlockStmt (" << statements.size() << " stmt(s))\n";
+        for (const auto& stmt : statements)
+            oss << stmt->toString(indent + 1) << "\n";
+        return oss.str();
+    }
+};
+
+class IfStmt : public Stmt {
+    std::unique_ptr<Expr> condition;
+    std::unique_ptr<Stmt> thenBranch;
+    std::unique_ptr<Stmt> elseBranch;
+public:
+    IfStmt(std::unique_ptr<Expr> condition, std::unique_ptr<Stmt> thenBranch, std::unique_ptr<Stmt> elseBranch = nullptr)
+        : condition(std::move(condition)), thenBranch(std::move(thenBranch)), elseBranch(std::move(elseBranch)) {}
+    
+    llvm::Value* codegen(::CodeGen& context) override;
+    
+    const std::unique_ptr<Expr>& getCondition() const { return condition; }
+    const std::unique_ptr<Stmt>& getThenBranch() const { return thenBranch; }
+    const std::unique_ptr<Stmt>& getElseBranch() const { return elseBranch; }
+    
+    std::string toString(int indent = 0) const override {
+        std::ostringstream oss;
+        oss << indentStr(indent) << "IfStmt\n";
+        oss << indentStr(indent + 1) << "Condition:\n";
+        oss << (condition ? condition->toString(indent + 2) : indentStr(indent + 2) + "null") << "\n";
+        oss << indentStr(indent + 1) << "Then:\n";
+        oss << (thenBranch ? thenBranch->toString(indent + 2) : indentStr(indent + 2) + "null") << "\n";
+        if (elseBranch) {
+            oss << indentStr(indent + 1) << "Else:\n";
+            oss << elseBranch->toString(indent + 2);
+        }
+        return oss.str();
+    }
+};
+
+class UnaryExpr : public Expr {
+    UnaryOp op;
+    std::unique_ptr<Expr> operand;
+public:
+    UnaryExpr(UnaryOp op, std::unique_ptr<Expr> operand)
+        : op(op), operand(std::move(operand)) {}
+    
+    llvm::Value* codegen(CodeGen& context) override;
+    UnaryOp getOp() const { return op; }
+    Expr* getOperand() const { return operand.get(); }
+    
+    std::string toString(int indent = 0) const override {
+        std::ostringstream oss;
+        oss << indentStr(indent) << "UnaryExpr (Op: " << static_cast<int>(op) << ")\n";
+        oss << (operand ? operand->toString(indent + 1) : indentStr(indent + 1) + "null");
+        return oss.str();
+    }
+};
+
 class ExprStmt : public Stmt {
     std::unique_ptr<Expr> expr;
 public:
@@ -213,8 +342,6 @@ public:
         return oss.str();
     }
 };
-
-// ------------------- Program -------------------
 
 class Program {
     std::vector<std::unique_ptr<Stmt>> statements;
