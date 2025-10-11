@@ -1,6 +1,5 @@
 site_name: Summit Language Docs
-theme:
-  name: material  # or any theme you like
+theme: jekyll-theme-minimal
 nav:
   - Home: index.md
   - Basics:
