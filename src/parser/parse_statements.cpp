@@ -203,8 +203,7 @@ unique_ptr<Stmt> Parser::parseFunctionDeclaration() {
         if (!match(TokenType::GREATER)) error("Expected '>' after '-' for return type");
         returnType = parseType();
     }
-    
-    // Parse function body statements until 'end'
+
     auto body = make_unique<BlockStmt>();
     while (!check(TokenType::END) && !isAtEnd()) {
         body->addStatement(parseStatement());
@@ -233,8 +232,38 @@ unique_ptr<Stmt> Parser::parseReturnStatement() {
     return make_unique<ReturnStmt>(move(value));
 }
 
+unique_ptr<Stmt> Parser::parseWhileStatement() {
+    if (!match(TokenType::WHILE)) {
+        error("Expected 'while'");
+    }
+    
+    if (!match(TokenType::LPAREN)) {
+        error("Expected '(' after 'while'");
+    }
+    
+    auto condition = parseExpression();
+    
+    if (!match(TokenType::RPAREN)) {
+        error("Expected ')' after while condition");
+    }
+    
+    if (!match(TokenType::THEN)) {
+        error("Expected 'then' after while condition");
+    }
+    
+    auto body = make_unique<BlockStmt>();
+    while (!check(TokenType::END) && !isAtEnd()) {
+        body->addStatement(parseStatement());
+    }
+    
+    if (!match(TokenType::END)) {
+        error("Expected 'end' after while statement");
+    }
+    
+    return make_unique<WhileStmt>(move(condition), move(body));
+}
+
 unique_ptr<Stmt> Parser::parseStatement() {
-    // Check for @entrypoint; statement first
     if (check(TokenType::ENTRYPOINT)) {
         return parseEntrypointStatement();
     }
@@ -248,13 +277,76 @@ unique_ptr<Stmt> Parser::parseStatement() {
     if (check(TokenType::IF)) {
         return parseIfStatement();
     }
+    if (check(TokenType::WHILE)) {
+        return parseWhileStatement();
+    }
     if (check(TokenType::VAR) || check(TokenType::CONST)) {
         return parseVariableDeclaration();
     }
-    if (check(TokenType::IDENTIFIER) && checkNext(TokenType::EQUALS)) { 
+    
+    if (check(TokenType::IDENTIFIER)) {
+        return parseAssignmentOrIncrement();
+    }
+    
+    auto expr = parseExpression();
+    
+    const Token& lastToken = tokens[current - 1];
+    if (!match(TokenType::SEMICOLON)) {
+        errorAt(lastToken, "Expected ';' after expression");
+    }
+    return make_unique<ExprStmt>(move(expr));
+}
+
+unique_ptr<Stmt> Parser::parseAssignmentOrIncrement() {
+    string name = peek().value;
+    advance();
+    
+    if (check(TokenType::INCREMENT) || check(TokenType::DECREMENT)) {
+        bool isIncrement = (peek().type == TokenType::INCREMENT);
+        advance();
+        
+        if (!match(TokenType::SEMICOLON)) {
+            error("Expected ';' after " + string(isIncrement ? "++" : "--"));
+        }
+        
+        auto varExpr = make_unique<VariableExpr>(name);
+        auto one = make_unique<NumberExpr>("1");
+        BinaryOp op = isIncrement ? BinaryOp::ADD : BinaryOp::SUBTRACT;
+        auto binExpr = make_unique<BinaryExpr>(op, move(varExpr), move(one));
+        return make_unique<AssignmentStmt>(name, move(binExpr));
+    }
+    
+    if (check(TokenType::PLUS_EQUALS) || check(TokenType::MINUS_EQUALS) ||
+        check(TokenType::STAR_EQUALS) || check(TokenType::SLASH_EQUALS)) {
+        
+        TokenType opToken = peek().type;
+        advance();
+        
+        auto right = parseExpression();
+
+        if (!match(TokenType::SEMICOLON)) {
+            error("Expected ';' after compound assignment");
+        }
+
+        BinaryOp binOp;
+        switch (opToken) {
+            case TokenType::PLUS_EQUALS: binOp = BinaryOp::ADD; break;
+            case TokenType::MINUS_EQUALS: binOp = BinaryOp::SUBTRACT; break;
+            case TokenType::STAR_EQUALS: binOp = BinaryOp::MULTIPLY; break;
+            case TokenType::SLASH_EQUALS: binOp = BinaryOp::DIVIDE; break;
+            default: throw runtime_error("Unknown compound assignment operator");
+        }
+        
+        auto leftVar = make_unique<VariableExpr>(name);
+        auto binExpr = make_unique<BinaryExpr>(binOp, move(leftVar), move(right));
+        return make_unique<AssignmentStmt>(name, move(binExpr));
+    }
+    
+    if (check(TokenType::EQUALS)) {
         return parseAssignment();
     }
     
+    current--;
     auto expr = parseExpression();
     
     const Token& lastToken = tokens[current - 1];

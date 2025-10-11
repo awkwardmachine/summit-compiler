@@ -75,3 +75,7 @@ llvm::Value* FunctionStmt::codegen(::CodeGen& context) {
 llvm::Value* ReturnStmt::codegen(::CodeGen& context) {
     return context.codegen(*this);
 }
+
+llvm::Value* WhileStmt::codegen(::CodeGen& context) {
+    return context.codegen(*this);
+}

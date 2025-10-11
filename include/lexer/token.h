@@ -6,7 +6,7 @@ enum class TokenType {
     // Keywords
     VAR, CONST, AS, BOOL, TRUE, FALSE,
     THEN, ELSE, ELSEIF, END, IF, AND, OR, NOT,
-    FUNC, RETURN, ENTRYPOINT,
+    FUNC, RETURN, ENTRYPOINT, WHILE,
     
     // Integer types
     INT4, INT8, INT12, INT16, INT24, INT32, INT48, INT64,
@@ -24,6 +24,12 @@ enum class TokenType {
     // Operators
     EQUALS, PLUS, MINUS, STAR, SLASH, PERCENT, DOT,
     GREATER, LESS, GREATER_EQUAL, LESS_EQUAL, EQUAL_EQUAL, NOT_EQUAL,
+    PLUS_EQUALS,
+    MINUS_EQUALS,
+    STAR_EQUALS,
+    SLASH_EQUALS,
+    INCREMENT,
+    DECREMENT,
     
     // Logical operators
     AND_AND, OR_OR, EXCLAMATION,

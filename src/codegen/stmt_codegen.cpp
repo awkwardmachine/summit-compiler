@@ -475,16 +475,13 @@ llvm::Value* StatementCodeGen::codegenFunctionStmt(CodeGen& context, FunctionStm
             idx++;
         }
         
-        // Generate function body
         stmt.getBody()->codegen(context);
         
-        // Check if we need to add a return instruction
         auto currentBlock = builder.GetInsertBlock();
         if (!currentBlock->getTerminator()) {
             if (stmt.getReturnType() == VarType::VOID) {
                 builder.CreateRetVoid();
             } else {
-                // For non-void functions, check if all code paths return
                 throw std::runtime_error("Function '" + stmt.getName() + 
                                        "' with return type '" + 
                                        TypeBounds::getTypeName(stmt.getReturnType()) + 
@@ -682,6 +679,47 @@ llvm::Value* StatementCodeGen::codegenReturnStmt(CodeGen& context, ReturnStmt& s
             builder.CreateRetVoid();
         }
     }
+    
+    return nullptr;
+}
+
+llvm::Value* StatementCodeGen::codegenWhileStmt(CodeGen& context, WhileStmt& stmt) {
+    auto& builder = context.getBuilder();
+    auto& llvmContext = context.getContext();
+    
+    auto currentFunction = builder.GetInsertBlock()->getParent();
+    
+    auto conditionBlock = BasicBlock::Create(llvmContext, "while.condition", currentFunction);
+    auto bodyBlock = BasicBlock::Create(llvmContext, "while.body");
+    auto afterBlock = BasicBlock::Create(llvmContext, "while.end");
+    
+    builder.CreateBr(conditionBlock);
+    
+    builder.SetInsertPoint(conditionBlock);
+    auto condValue = stmt.getCondition()->codegen(context);
+    
+    if (!condValue->getType()->isIntegerTy(1)) {
+        if (condValue->getType()->isIntegerTy()) {
+            condValue = builder.CreateICmpNE(condValue, 
+                ConstantInt::get(condValue->getType(), 0));
+        } else {
+            throw std::runtime_error("While condition must be a boolean or integer type");
+        }
+    }
+    
+    builder.CreateCondBr(condValue, bodyBlock, afterBlock);
+    
+    currentFunction->insert(currentFunction->end(), bodyBlock);
+    builder.SetInsertPoint(bodyBlock);
+    
+    stmt.getBody()->codegen(context);
+
+    if (!builder.GetInsertBlock()->getTerminator()) {
+        builder.CreateBr(conditionBlock);
+    }
+    
+    currentFunction->insert(currentFunction->end(), afterBlock);
+    builder.SetInsertPoint(afterBlock);
     
     return nullptr;
 }

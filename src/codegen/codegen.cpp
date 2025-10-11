@@ -176,6 +176,9 @@ llvm::Value* CodeGen::codegen(FunctionStmt& stmt) {
 llvm::Value* CodeGen::codegen(ReturnStmt& stmt) {
     return StatementCodeGen::codegenReturnStmt(*this, stmt);
 }
+llvm::Value* CodeGen::codegen(WhileStmt& stmt) {
+    return StatementCodeGen::codegenWhileStmt(*this, stmt);
+}
 
 /* Print LLVM IR to stdout */
 void CodeGen::printIR() {

@@ -30,6 +30,8 @@ private:
     std::unique_ptr<AST::Stmt> parseBlock();
     std::unique_ptr<AST::Stmt> parseElseIfChain();
     std::unique_ptr<AST::Stmt> parseEntrypointStatement();
+    std::unique_ptr<AST::Stmt> parseWhileStatement();
+    std::unique_ptr<AST::Stmt> parseAssignmentOrIncrement();
 
     std::unique_ptr<AST::Expr> parseExpressionFromString(const std::string& exprStr);
     std::vector<std::unique_ptr<AST::Expr>> extractExpressionsFromFormat(const std::string& formatStr);

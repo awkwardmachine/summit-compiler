@@ -10,7 +10,7 @@ unordered_map<string, TokenType> Lexer::keywords = {
     {"if", TokenType::IF}, {"then", TokenType::THEN}, {"else", TokenType::ELSE},
     {"elseif", TokenType::ELSEIF}, {"end", TokenType::END}, {"and", TokenType::AND},
     {"or", TokenType::OR}, {"not", TokenType::NOT}, {"func", TokenType::FUNC},
-    {"ret", TokenType::RETURN},
+    {"ret", TokenType::RETURN}, {"while", TokenType::WHILE},
     
     {"int4", TokenType::INT4}, {"int8", TokenType::INT8}, {"int12", TokenType::INT12},
     {"int16", TokenType::INT16}, {"int24", TokenType::INT24}, {"int32", TokenType::INT32},
@@ -210,14 +210,12 @@ Token Lexer::readBuiltin() {
 
     while (isalnum(peek()) || peek() == '_') builtin += advance();
     
-    // Check if this is the special @entrypoint token
     if (builtin == "entrypoint") {
         return Token(TokenType::ENTRYPOINT, "@entrypoint", startLine, startCol);
     }
     
     return Token(TokenType::BUILTIN, "@" + builtin, startLine, startCol);
 }
-
 vector<Token> Lexer::tokenize() {
     vector<Token> tokens;
     
@@ -245,50 +243,147 @@ vector<Token> Lexer::tokenize() {
             tokens.push_back(readBuiltin());
         } else {
             switch (c) {
-                case '=': advance(); tokens.push_back(peek() == '=' 
-                    ? (advance(), Token(TokenType::EQUAL_EQUAL, "==", currentLine, currentCol))
-                    : Token(TokenType::EQUALS, "=", currentLine, currentCol)); break;
-                case '!': advance(); tokens.push_back(peek() == '=' 
-                    ? (advance(), Token(TokenType::NOT_EQUAL, "!=", currentLine, currentCol))
-                    : Token(TokenType::EXCLAMATION, "!", currentLine, currentCol)); break;
-                case '<': advance(); 
+                case '=': 
+                    advance(); 
                     if (peek() == '=') {
-                        advance(); tokens.push_back(Token(TokenType::LESS_EQUAL, "<=", currentLine, currentCol));
+                        advance(); 
+                        tokens.push_back(Token(TokenType::EQUAL_EQUAL, "==", currentLine, currentCol));
+                    } else {
+                        tokens.push_back(Token(TokenType::EQUALS, "=", currentLine, currentCol));
+                    }
+                    break;
+                case '!': 
+                    advance(); 
+                    tokens.push_back(peek() == '=' 
+                        ? (advance(), Token(TokenType::NOT_EQUAL, "!=", currentLine, currentCol))
+                        : Token(TokenType::EXCLAMATION, "!", currentLine, currentCol)); 
+                    break;
+                case '<': 
+                    advance(); 
+                    if (peek() == '=') {
+                        advance(); 
+                        tokens.push_back(Token(TokenType::LESS_EQUAL, "<=", currentLine, currentCol));
                     } else if (peek() == '<') {
-                        advance(); tokens.push_back(Token(TokenType::LEFT_SHIFT, "<<", currentLine, currentCol));
+                        advance(); 
+                        tokens.push_back(Token(TokenType::LEFT_SHIFT, "<<", currentLine, currentCol));
                     } else {
                         tokens.push_back(Token(TokenType::LESS, "<", currentLine, currentCol));
-                    } break;
-                case '>': advance();
+                    } 
+                    break;
+                case '>': 
+                    advance();
                     if (peek() == '=') {
-                        advance(); tokens.push_back(Token(TokenType::GREATER_EQUAL, ">=", currentLine, currentCol));
+                        advance(); 
+                        tokens.push_back(Token(TokenType::GREATER_EQUAL, ">=", currentLine, currentCol));
                     } else if (peek() == '>') {
-                        advance(); tokens.push_back(Token(TokenType::RIGHT_SHIFT, ">>", currentLine, currentCol));
+                        advance(); 
+                        tokens.push_back(Token(TokenType::RIGHT_SHIFT, ">>", currentLine, currentCol));
                     } else {
                         tokens.push_back(Token(TokenType::GREATER, ">", currentLine, currentCol));
-                    } break;
-                case '&': advance(); tokens.push_back(peek() == '&' 
-                    ? (advance(), Token(TokenType::AND_AND, "&&", currentLine, currentCol))
-                    : Token(TokenType::AMPERSAND, "&", currentLine, currentCol)); break;
-                case '|': advance(); tokens.push_back(peek() == '|' 
-                    ? (advance(), Token(TokenType::OR_OR, "||", currentLine, currentCol))
-                    : Token(TokenType::PIPE, "|", currentLine, currentCol)); break;
-                case '^': tokens.push_back(Token(TokenType::CARET, "^", currentLine, currentCol)); advance(); break;
-                case '~': tokens.push_back(Token(TokenType::TILDE, "~", currentLine, currentCol)); advance(); break;
-                case '%': tokens.push_back(Token(TokenType::PERCENT, "%", currentLine, currentCol)); advance(); break;
-                case '+': tokens.push_back(Token(TokenType::PLUS, "+", currentLine, currentCol)); advance(); break;
-                case '-': tokens.push_back(Token(TokenType::MINUS, "-", currentLine, currentCol)); advance(); break;
-                case '*': tokens.push_back(Token(TokenType::STAR, "*", currentLine, currentCol)); advance(); break;
-                case '/': tokens.push_back(Token(TokenType::SLASH, "/", currentLine, currentCol)); advance(); break;
-                case ':': tokens.push_back(Token(TokenType::COLON, ":", currentLine, currentCol)); advance(); break;
-                case ';': tokens.push_back(Token(TokenType::SEMICOLON, ";", currentLine, currentCol)); advance(); break;
-                case '(': tokens.push_back(Token(TokenType::LPAREN, "(", currentLine, currentCol)); advance(); break;
-                case ')': tokens.push_back(Token(TokenType::RPAREN, ")", currentLine, currentCol)); advance(); break;
-                case ',': tokens.push_back(Token(TokenType::COMMA, ",", currentLine, currentCol)); advance(); break;
-                case '{': tokens.push_back(Token(TokenType::LBRACE, "{", currentLine, currentCol)); advance(); break;
-                case '}': tokens.push_back(Token(TokenType::RBRACE, "}", currentLine, currentCol)); advance(); break;
-                case '.': tokens.push_back(Token(TokenType::DOT, ".", currentLine, currentCol)); advance(); break;
-                default: tokens.push_back(Token(TokenType::UNKNOWN, string(1, c), currentLine, currentCol)); advance(); break;
+                    } 
+                    break;
+                case '&': 
+                    advance(); 
+                    tokens.push_back(peek() == '&' 
+                        ? (advance(), Token(TokenType::AND_AND, "&&", currentLine, currentCol))
+                        : Token(TokenType::AMPERSAND, "&", currentLine, currentCol)); 
+                    break;
+                case '|': 
+                    advance(); 
+                    tokens.push_back(peek() == '|' 
+                        ? (advance(), Token(TokenType::OR_OR, "||", currentLine, currentCol))
+                        : Token(TokenType::PIPE, "|", currentLine, currentCol)); 
+                    break;
+                case '^': 
+                    tokens.push_back(Token(TokenType::CARET, "^", currentLine, currentCol)); 
+                    advance(); 
+                    break;
+                case '~': 
+                    tokens.push_back(Token(TokenType::TILDE, "~", currentLine, currentCol)); 
+                    advance(); 
+                    break;
+                case '%': 
+                    tokens.push_back(Token(TokenType::PERCENT, "%", currentLine, currentCol)); 
+                    advance(); 
+                    break;
+                case '+': 
+                    advance();
+                    if (peek() == '=') {
+                        advance();
+                        tokens.push_back(Token(TokenType::PLUS_EQUALS, "+=", currentLine, currentCol));
+                    } else if (peek() == '+') {
+                        advance();
+                        tokens.push_back(Token(TokenType::INCREMENT, "++", currentLine, currentCol));
+                    } else {
+                        tokens.push_back(Token(TokenType::PLUS, "+", currentLine, currentCol));
+                    }
+                    break;
+                case '-': 
+                    advance();
+                    if (peek() == '=') {
+                        advance();
+                        tokens.push_back(Token(TokenType::MINUS_EQUALS, "-=", currentLine, currentCol));
+                    } else if (peek() == '-') {
+                        advance();
+                        tokens.push_back(Token(TokenType::DECREMENT, "--", currentLine, currentCol));
+                    } else {
+                        tokens.push_back(Token(TokenType::MINUS, "-", currentLine, currentCol));
+                    }
+                    break;
+                case '*': 
+                    advance();
+                    if (peek() == '=') {
+                        advance();
+                        tokens.push_back(Token(TokenType::STAR_EQUALS, "*=", currentLine, currentCol));
+                    } else {
+                        tokens.push_back(Token(TokenType::STAR, "*", currentLine, currentCol));
+                    }
+                    break;
+                case '/': 
+                    advance();
+                    if (peek() == '=') {
+                        advance();
+                        tokens.push_back(Token(TokenType::SLASH_EQUALS, "/=", currentLine, currentCol));
+                    } else {
+                        tokens.push_back(Token(TokenType::SLASH, "/", currentLine, currentCol));
+                    }
+                    break;
+                case ':': 
+                    tokens.push_back(Token(TokenType::COLON, ":", currentLine, currentCol)); 
+                    advance(); 
+                    break;
+                case ';': 
+                    tokens.push_back(Token(TokenType::SEMICOLON, ";", currentLine, currentCol)); 
+                    advance(); 
+                    break;
+                case '(': 
+                    tokens.push_back(Token(TokenType::LPAREN, "(", currentLine, currentCol)); 
+                    advance(); 
+                    break;
+                case ')': 
+                    tokens.push_back(Token(TokenType::RPAREN, ")", currentLine, currentCol)); 
+                    advance(); 
+                    break;
+                case ',': 
+                    tokens.push_back(Token(TokenType::COMMA, ",", currentLine, currentCol)); 
+                    advance(); 
+                    break;
+                case '{': 
+                    tokens.push_back(Token(TokenType::LBRACE, "{", currentLine, currentCol)); 
+                    advance(); 
+                    break;
+                case '}': 
+                    tokens.push_back(Token(TokenType::RBRACE, "}", currentLine, currentCol)); 
+                    advance(); 
+                    break;
+                case '.': 
+                    tokens.push_back(Token(TokenType::DOT, ".", currentLine, currentCol)); 
+                    advance(); 
+                    break;
+                default: 
+                    tokens.push_back(Token(TokenType::UNKNOWN, string(1, c), currentLine, currentCol)); 
+                    advance(); 
+                    break;
             }
         }
     }

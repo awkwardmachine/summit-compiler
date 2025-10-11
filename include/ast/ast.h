@@ -349,6 +349,29 @@ public:
     }
 };
 
+class WhileStmt : public Stmt {
+    std::unique_ptr<Expr> condition;
+    std::unique_ptr<BlockStmt> body;
+public:
+    WhileStmt(std::unique_ptr<Expr> condition, std::unique_ptr<BlockStmt> body)
+        : condition(std::move(condition)), body(std::move(body)) {}
+    
+    llvm::Value* codegen(::CodeGen& context) override;
+    
+    const std::unique_ptr<Expr>& getCondition() const { return condition; }
+    const std::unique_ptr<BlockStmt>& getBody() const { return body; }
+    
+    std::string toString(int indent = 0) const override {
+        std::ostringstream oss;
+        oss << indentStr(indent) << "WhileStmt\n";
+        oss << indentStr(indent + 1) << "Condition:\n";
+        oss << (condition ? condition->toString(indent + 2) : indentStr(indent + 2) + "null") << "\n";
+        oss << indentStr(indent + 1) << "Body:\n";
+        oss << (body ? body->toString(indent + 2) : indentStr(indent + 2) + "null");
+        return oss.str();
+    }
+};
+
 class EntrypointStmt : public Stmt {
 public:
     EntrypointStmt() = default;

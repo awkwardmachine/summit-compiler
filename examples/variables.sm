@@ -1,66 +1,8 @@
-func add(a: int32, b: int32) -> int32
-    var sum: int32 = a + b;
-    ret sum;
-end
-
-func subtract(a: int32, b: int32) -> int32
-    var diff: int32 = a - b;
-    ret diff;
-end
-
-func multiply(a: int32, b: int32) -> int32
-    var product: int32 = a * b;
-    ret product;
-end
-
-func max(a: int32, b: int32) -> int32
-    if (a > b) then
-        ret a;
-    elseif (a < b) then
-        ret b;
-    else
-        @println("Values are equal.");
-        ret a;
+func main() -> uint0
+    var x: int8 = 0;
+    while (x < 5) then
+        x++;
+        @println(x);
     end
-    ret 0;
-end
-
-func describe_number(n: int32) -> str
-    if (n > 0) then
-        ret "positive";
-    elseif (n < 0) then
-        ret "negative";
-    else
-        ret "zero";
-    end
-    ret "";
-end
-
-@entrypoint;
-func start() -> uint0
-    const name: str = "Summit";
-    @println("Welcome to the " + name + " demo!");
-
-    var x: int32 = 10;
-    var y: int32 = 5;
-
-    @println("x = " + (x as str));
-    @println("y = " + (y as str));
-
-    var s: int32 = add(x, y);
-    @println("x + y = " + (s as str));
-
-    var d: int32 = subtract(x, y);
-    @println("x - y = " + (d as str));
-
-    var m: int32 = multiply(x, y);
-    @println("x * y = " + (m as str));
-
-    var largest: int32 = max(x, y);
-    @println("max(x, y) = " + (largest as str));
-
-    var desc: str = describe_number(d);
-    @println("x - y is " + desc);
-
     ret 0;
 end
