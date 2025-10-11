@@ -42,6 +42,7 @@ llvm::Value* StatementCodeGen::codegenGlobalVariable(CodeGen& context, VariableD
     llvm::Constant* initialValue = nullptr;
     
     if (decl.getValue()) {
+        // Handle module expressions (like @import)
         if (auto* moduleExpr = dynamic_cast<ModuleExpr*>(decl.getValue().get())) {
             const std::string& moduleName = moduleExpr->getModuleName();
             
@@ -78,6 +79,56 @@ llvm::Value* StatementCodeGen::codegenGlobalVariable(CodeGen& context, VariableD
             } else {
                 throw std::runtime_error("Unknown module: " + moduleName);
             }
+        }
+        // Handle member access expressions in global context (like lib.io)
+        else if (auto* memberAccess = dynamic_cast<MemberAccessExpr*>(decl.getValue().get())) {
+            // For global variables, we can only handle module member access
+            if (auto* varExpr = dynamic_cast<VariableExpr*>(memberAccess->getObject().get())) {
+                std::string moduleName = varExpr->getName();
+                std::string memberName = memberAccess->getMember();
+                
+                // Check if the base is a known module
+                auto baseVar = context.lookupVariable(moduleName);
+                if (baseVar) {
+                    auto baseType = context.lookupVariableType(moduleName);
+                    if (baseType == VarType::MODULE) {
+                        // Create a module reference for the member
+                        std::string actualModuleName = context.getModuleIdentity(moduleName);
+                        if (!actualModuleName.empty()) {
+                            moduleName = actualModuleName;
+                        }
+                        
+                        // Handle specific module members
+                        if (moduleName == "std" && memberName == "io") {
+                            // Create io module reference
+                            auto ioType = context.getLLVMType(VarType::MODULE);
+                            initialValue = ConstantAggregateZero::get(ioType);
+                            
+                            auto globalVar = new llvm::GlobalVariable(
+                                module,
+                                ioType,
+                                decl.getIsConst(),
+                                llvm::GlobalValue::ExternalLinkage,
+                                initialValue,
+                                decl.getName()
+                            );
+                            
+                            context.getNamedValues()[decl.getName()] = globalVar;
+                            context.getVariableTypes()[decl.getName()] = VarType::MODULE;
+                            context.setModuleReference(decl.getName(), globalVar, "io");
+                            
+                            std::cout << "DEBUG: Created global module alias: " << decl.getName() << " -> io" << std::endl;
+                            
+                            if (decl.getIsConst()) {
+                                context.getConstVariables().insert(decl.getName());
+                            }
+                            
+                            return globalVar;
+                        }
+                    }
+                }
+            }
+            throw std::runtime_error("Global variables can only be initialized with constant expressions or module members");
         }
         else if (auto numberExpr = dynamic_cast<NumberExpr*>(decl.getValue().get())) {
             const BigInt& bigValue = numberExpr->getValue();
@@ -173,8 +224,7 @@ llvm::Value* StatementCodeGen::codegenGlobalVariable(CodeGen& context, VariableD
     }
     
     return globalVar;
-}
-llvm::Value* StatementCodeGen::codegenVariableDecl(CodeGen& context, VariableDecl& decl) {
+}llvm::Value* StatementCodeGen::codegenVariableDecl(CodeGen& context, VariableDecl& decl) {
     auto& builder = context.getBuilder();
     auto currentFunction = builder.GetInsertBlock() ? builder.GetInsertBlock()->getParent() : nullptr;
     
@@ -227,6 +277,15 @@ llvm::Value* StatementCodeGen::codegenVariableDecl(CodeGen& context, VariableDec
             }
         }
         
+        // Also check for function pointers (like println)
+        if (auto* func = llvm::dyn_cast<llvm::Function>(value)) {
+            std::string funcName = func->getName().str();
+            if (funcName.find("io_") == 0 || funcName.find("println") != std::string::npos) {
+                // Treat function pointers as regular values, not modules
+                isModule = false;
+            }
+        }
+        
         if (isModule) {
             context.getNamedValues()[decl.getName()] = value;
             context.getVariableTypes()[decl.getName()] = AST::VarType::MODULE;
@@ -244,6 +303,7 @@ llvm::Value* StatementCodeGen::codegenVariableDecl(CodeGen& context, VariableDec
         }
     }
 
+    // ... rest of the existing function for non-module variables
     auto varType = context.getLLVMType(decl.getType());
     if (!varType) {
         throw std::runtime_error("Unknown variable type");

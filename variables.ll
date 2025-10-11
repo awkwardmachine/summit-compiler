@@ -4,6 +4,7 @@ source_filename = "summit"
 %std_module_t = type opaque
 %io_module_t = type opaque
 %module_t = type opaque
+%module_t.0 = type opaque
 
 @std = constant %std_module_t zeroinitializer
 @io = constant %io_module_t zeroinitializer
@@ -17,8 +18,9 @@ source_filename = "summit"
 @7 = private unnamed_addr constant [5 x i8] c"true\00", align 1
 @8 = private unnamed_addr constant [6 x i8] c"false\00", align 1
 @lib = constant %module_t zeroinitializer
-@9 = private unnamed_addr constant [14 x i8] c"Hello, world!\00", align 1
-@10 = private unnamed_addr constant [8 x i8] c"Also hi\00", align 1
+@output = constant %module_t.0 zeroinitializer
+@9 = private unnamed_addr constant [3 x i8] c"%d\00", align 1
+@10 = private unnamed_addr constant [14 x i8] c"Hello, world!\00", align 1
 
 define void @io_println_str(ptr %str) {
 entry:
@@ -101,7 +103,30 @@ declare ptr @strcpy(ptr, ptr)
 
 define i32 @main() {
 entry:
-  call void @io_println_str(ptr @9)
+  %x = alloca i8, align 1
+  store i8 5, ptr %x, align 1
+  br label %while.condition
+
+while.condition:                                  ; preds = %while.body, %entry
+  %x1 = load i8, ptr %x, align 1
+  %0 = sext i8 %x1 to i64
+  %lttmp = icmp slt i64 %0, 10
+  br i1 %lttmp, label %while.body, label %while.end
+
+while.body:                                       ; preds = %while.condition
+  %x2 = load i8, ptr %x, align 1
+  %1 = sext i8 %x2 to i64
+  %addtmp = add i64 %1, 1
+  %2 = trunc i64 %addtmp to i8
+  store i8 %2, ptr %x, align 1
+  %x3 = load i8, ptr %x, align 1
+  %str_buffer = alloca i8, i64 64, align 1
+  %3 = sext i8 %x3 to i32
+  %4 = call i32 (ptr, ptr, ...) @sprintf(ptr %str_buffer, ptr @9, i32 %3)
+  call void @io_println_str(ptr %str_buffer)
+  br label %while.condition
+
+while.end:                                        ; preds = %while.condition
   call void @io_println_str(ptr @10)
   ret i32 0
 }

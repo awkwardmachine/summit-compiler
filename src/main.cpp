@@ -181,7 +181,7 @@ int main(int argc, char* argv[]) {
         CodeGen codegen;
 
         StandardLibrary::initialize(codegen);
-        
+
         ast->codegen(codegen);
 
         if (printIR) {

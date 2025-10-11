@@ -1,8 +1,12 @@
 const lib = @import("std");
+const output = lib.io;
 
 func main() -> int32
-    const output = lib.io;
+    var x: int8 = 5;
+    while (x < 10) then
+        x++;
+        output.println(x);
+    end
     output.println("Hello, world!");
-    lib.io.println("Also hi");
     ret 0;
 end

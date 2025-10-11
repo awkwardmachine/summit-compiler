@@ -749,9 +749,11 @@ llvm::Value* ExpressionCodeGen::codegenMemberAccess(CodeGen& context, MemberAcce
     auto object = expr.getObject()->codegen(context);
     const std::string& member = expr.getMember();
 
+    // Handle global variable module access
     if (auto* globalVar = llvm::dyn_cast<llvm::GlobalVariable>(object)) {
         std::string moduleName = globalVar->getName().str();
         
+        // Check if this is a module
         if (context.lookupVariable(moduleName)) {
             auto varType = context.lookupVariableType(moduleName);
             if (varType == AST::VarType::MODULE) {
@@ -759,12 +761,12 @@ llvm::Value* ExpressionCodeGen::codegenMemberAccess(CodeGen& context, MemberAcce
                 if (!actualModuleName.empty() && actualModuleName != moduleName) {
                     return handleModuleMemberAccess(context, actualModuleName, member);
                 }
+                return handleModuleMemberAccess(context, moduleName, member);
             }
         }
-        
-        return handleModuleMemberAccess(context, moduleName, member);
     }
     
+    // Handle variable expressions that are modules
     if (auto* varExpr = dynamic_cast<AST::VariableExpr*>(expr.getObject().get())) {
         std::string varName = varExpr->getName();
         
@@ -775,12 +777,19 @@ llvm::Value* ExpressionCodeGen::codegenMemberAccess(CodeGen& context, MemberAcce
         }
     }
     
+    // Handle nested member access (like lib.io.println)
     if (auto* memberAccess = dynamic_cast<AST::MemberAccessExpr*>(expr.getObject().get())) {
         auto baseObject = memberAccess->codegen(context);
         
         if (auto* globalVar = llvm::dyn_cast<llvm::GlobalVariable>(baseObject)) {
             std::string baseModuleName = globalVar->getName().str();
             return handleModuleMemberAccess(context, baseModuleName, member);
+        }
+        
+        // Handle cases where we have lib.io and want to access println
+        if (auto* func = llvm::dyn_cast<llvm::Function>(baseObject)) {
+            // If the base is already a function, return it directly
+            return baseObject;
         }
     }
     
@@ -795,7 +804,6 @@ std::string ExpressionCodeGen::extractModuleName(CodeGen& context, const std::st
 
     return varName;
 }
-
 llvm::Value* ExpressionCodeGen::handleModuleMemberAccess(CodeGen& context, const std::string& moduleName, const std::string& member) {
     std::string actualModuleName = moduleName;
 
@@ -818,7 +826,22 @@ llvm::Value* ExpressionCodeGen::handleModuleMemberAccess(CodeGen& context, const
         if (member == "io") {
             auto ioModule = context.lookupVariable("io");
             if (!ioModule) {
-                throw std::runtime_error("IO module not found");
+                // Create io module if it doesn't exist
+                auto& module = context.getModule();
+                auto& llvmContext = context.getContext();
+                auto moduleType = llvm::StructType::create(llvmContext, "module_t");
+                auto ioVar = new llvm::GlobalVariable(
+                    module,
+                    moduleType,
+                    true, // isConstant
+                    llvm::GlobalValue::ExternalLinkage,
+                    ConstantAggregateZero::get(moduleType),
+                    "io"
+                );
+                context.getNamedValues()["io"] = ioVar;
+                context.getVariableTypes()["io"] = AST::VarType::MODULE;
+                context.setModuleReference("io", ioVar, "io");
+                return ioVar;
             }
             return ioModule;
         }
@@ -828,7 +851,11 @@ llvm::Value* ExpressionCodeGen::handleModuleMemberAccess(CodeGen& context, const
             auto& module = context.getModule();
             auto printlnFunc = module.getFunction("io_println_str");
             if (!printlnFunc) {
-                throw std::runtime_error("println function not found");
+                // Create the println function if it doesn't exist
+                auto& llvmContext = context.getContext();
+                auto* i8Ptr = PointerType::get(Type::getInt8Ty(llvmContext), 0);
+                auto printlnType = FunctionType::get(Type::getVoidTy(llvmContext), {i8Ptr}, false);
+                printlnFunc = Function::Create(printlnType, Function::ExternalLinkage, "io_println_str", &module);
             }
             return printlnFunc;
         }
