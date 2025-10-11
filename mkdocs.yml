@@ -1,7 +1,6 @@
 site_name: Summit Language Docs
-site_url: https://username.github.io/summit-docs
 theme:
-  name: material
+  name: material  # or any theme you like
 nav:
   - Home: index.md
   - Basics:
