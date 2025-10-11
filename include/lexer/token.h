@@ -6,7 +6,7 @@ enum class TokenType {
     // Keywords
     VAR, CONST, AS, BOOL, TRUE, FALSE,
     THEN, ELSE, ELSEIF, END, IF, AND, OR, NOT,
-    FUNC, RETURN, ENTRYPOINT, WHILE,
+    FUNC, RETURN, ENTRYPOINT, WHILE, FOR, DO,
     
     // Integer types
     INT4, INT8, INT12, INT16, INT24, INT32, INT48, INT64,

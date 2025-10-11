@@ -372,6 +372,48 @@ public:
     }
 };
 
+class ForLoopStmt : public Stmt {
+    std::string varName;
+    VarType varType;
+    std::unique_ptr<Expr> initializer;
+    std::unique_ptr<Expr> condition;
+    std::unique_ptr<Expr> increment;
+    std::unique_ptr<BlockStmt> body;
+public:
+    ForLoopStmt(const std::string& varName, VarType varType,
+                std::unique_ptr<Expr> initializer,
+                std::unique_ptr<Expr> condition,
+                std::unique_ptr<Expr> increment,
+                std::unique_ptr<BlockStmt> body)
+        : varName(varName), varType(varType), initializer(std::move(initializer)),
+          condition(std::move(condition)), increment(std::move(increment)),
+          body(std::move(body)) {}
+    
+    llvm::Value* codegen(::CodeGen& context) override;
+    
+    const std::string& getVarName() const { return varName; }
+    VarType getVarType() const { return varType; }
+    const std::unique_ptr<Expr>& getInitializer() const { return initializer; }
+    const std::unique_ptr<Expr>& getCondition() const { return condition; }
+    const std::unique_ptr<Expr>& getIncrement() const { return increment; }
+    const std::unique_ptr<BlockStmt>& getBody() const { return body; }
+    
+    std::string toString(int indent = 0) const override {
+        std::ostringstream oss;
+        oss << indentStr(indent) << "ForLoopStmt: " << quoted(varName) 
+            << " : " << static_cast<int>(varType) << "\n";
+        oss << indentStr(indent + 1) << "Initializer:\n";
+        oss << (initializer ? initializer->toString(indent + 2) : indentStr(indent + 2) + "null") << "\n";
+        oss << indentStr(indent + 1) << "Condition:\n";
+        oss << (condition ? condition->toString(indent + 2) : indentStr(indent + 2) + "null") << "\n";
+        oss << indentStr(indent + 1) << "Increment:\n";
+        oss << (increment ? increment->toString(indent + 2) : indentStr(indent + 2) + "null") << "\n";
+        oss << indentStr(indent + 1) << "Body:\n";
+        oss << (body ? body->toString(indent + 2) : indentStr(indent + 2) + "null");
+        return oss.str();
+    }
+};
+
 class EntrypointStmt : public Stmt {
 public:
     EntrypointStmt() = default;

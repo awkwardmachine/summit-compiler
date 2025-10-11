@@ -1,8 +1,7 @@
-func main() -> uint0
-    var x: int8 = 0;
-    while (x < 5) then
-        x++;
-        @println(x);
+func main() -> int32
+    for (i: int4 = 0; i < 7; i += 4) do
+        @println("i = " + (i as str));
     end
+
     ret 0;
 end

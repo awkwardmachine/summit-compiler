@@ -263,6 +263,100 @@ unique_ptr<Stmt> Parser::parseWhileStatement() {
     return make_unique<WhileStmt>(move(condition), move(body));
 }
 
+unique_ptr<Stmt> Parser::parseForLoopStatement() {
+    if (!match(TokenType::FOR)) {
+        error("Expected 'for'");
+    }
+
+    if (!match(TokenType::LPAREN)) {
+        error("Expected '(' after 'for'");
+    }
+
+    if (!match(TokenType::IDENTIFIER)) {
+        error("Expected variable name in for loop");
+    }
+    string varName = tokens[current - 1].value;
+
+    if (!match(TokenType::COLON)) {
+        error("Expected ':' after variable name in for loop");
+    }
+    VarType varType = parseType();
+
+    unique_ptr<Expr> initializer = nullptr;
+    if (match(TokenType::EQUALS)) {
+        initializer = parseExpression();
+    }
+
+    if (!match(TokenType::SEMICOLON)) {
+        error("Expected ';' after for loop initializer");
+    }
+
+    auto condition = parseExpression();
+    if (!match(TokenType::SEMICOLON)) {
+        error("Expected ';' after for loop condition");
+    }
+
+    unique_ptr<Expr> increment = nullptr;
+
+    if (check(TokenType::IDENTIFIER)) {
+        string incVarName = peek().value;
+        advance();
+
+        if (check(TokenType::INCREMENT) || check(TokenType::DECREMENT)) {
+            bool isIncrement = (peek().type == TokenType::INCREMENT);
+            advance();
+            auto varExpr = make_unique<VariableExpr>(incVarName);
+            auto one = make_unique<NumberExpr>("1");
+            BinaryOp op = isIncrement ? BinaryOp::ADD : BinaryOp::SUBTRACT;
+            increment = make_unique<BinaryExpr>(op, move(varExpr), move(one));
+        }
+        else if (check(TokenType::PLUS_EQUALS) || check(TokenType::MINUS_EQUALS) ||
+                 check(TokenType::STAR_EQUALS) || check(TokenType::SLASH_EQUALS)) {
+            TokenType opToken = peek().type;
+            advance();
+            auto right = parseExpression();
+
+            BinaryOp binOp;
+            switch (opToken) {
+                case TokenType::PLUS_EQUALS: binOp = BinaryOp::ADD; break;
+                case TokenType::MINUS_EQUALS: binOp = BinaryOp::SUBTRACT; break;
+                case TokenType::STAR_EQUALS: binOp = BinaryOp::MULTIPLY; break;
+                case TokenType::SLASH_EQUALS: binOp = BinaryOp::DIVIDE; break;
+                default: throw runtime_error("Unknown compound assignment operator");
+            }
+
+            auto leftVar = make_unique<VariableExpr>(incVarName);
+            increment = make_unique<BinaryExpr>(binOp, move(leftVar), move(right));
+        }
+        else {
+            current--;
+            increment = parseExpression();
+        }
+    } else {
+        increment = parseExpression();
+    }
+
+    if (!match(TokenType::RPAREN)) {
+        error("Expected ')' after for loop header");
+    }
+
+    if (!match(TokenType::DO)) {
+        error("Expected 'do' after for loop header");
+    }
+
+    auto body = make_unique<BlockStmt>();
+    while (!check(TokenType::END) && !isAtEnd()) {
+        body->addStatement(parseStatement());
+    }
+
+    if (!match(TokenType::END)) {
+        error("Expected 'end' after for loop body");
+    }
+
+    return make_unique<ForLoopStmt>(varName, varType, move(initializer),
+                                    move(condition), move(increment), move(body));
+}
+
 unique_ptr<Stmt> Parser::parseStatement() {
     if (check(TokenType::ENTRYPOINT)) {
         return parseEntrypointStatement();
@@ -279,6 +373,9 @@ unique_ptr<Stmt> Parser::parseStatement() {
     }
     if (check(TokenType::WHILE)) {
         return parseWhileStatement();
+    }
+    if (check(TokenType::FOR)) {
+        return parseForLoopStatement();
     }
     if (check(TokenType::VAR) || check(TokenType::CONST)) {
         return parseVariableDeclaration();

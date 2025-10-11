@@ -29,6 +29,7 @@ namespace AST {
     class FunctionStmt;
     class ReturnStmt;
     class WhileStmt;
+    class ForLoopStmt;
     class Program;
 }
 
@@ -90,6 +91,7 @@ public:
     llvm::Value* codegen(AST::FunctionStmt& stmt);
     llvm::Value* codegen(AST::ReturnStmt& stmt);
     llvm::Value* codegen(AST::WhileStmt& stmt);
+    llvm::Value* codegen(AST::ForLoopStmt& stmt);
     llvm::Value* codegen(AST::Program& program);
     
     /* Debugging and output methods */

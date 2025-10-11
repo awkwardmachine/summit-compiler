@@ -723,3 +723,155 @@ llvm::Value* StatementCodeGen::codegenWhileStmt(CodeGen& context, WhileStmt& stm
     
     return nullptr;
 }
+
+llvm::Value* StatementCodeGen::codegenForLoopStmt(CodeGen& context, ForLoopStmt& stmt) {
+    auto& builder = context.getBuilder();
+    auto& llvmContext = context.getContext();
+   
+    auto currentFunction = builder.GetInsertBlock()->getParent();
+   
+    auto conditionBlock = BasicBlock::Create(llvmContext, "for.condition", currentFunction);
+    auto bodyBlock = BasicBlock::Create(llvmContext, "for.body");
+    auto incrementBlock = BasicBlock::Create(llvmContext, "for.increment");
+    auto afterBlock = BasicBlock::Create(llvmContext, "for.end");
+
+    context.enterScope();
+
+    auto varType = stmt.getVarType();
+    auto llvmVarType = context.getLLVMType(varType);
+    IRBuilder<> entryBuilder(&currentFunction->getEntryBlock(),
+                           currentFunction->getEntryBlock().begin());
+    auto alloca = entryBuilder.CreateAlloca(llvmVarType, nullptr, stmt.getVarName());
+   
+    if (stmt.getInitializer()) {
+        auto initValue = stmt.getInitializer()->codegen(context);
+
+        if (auto numberExpr = dynamic_cast<NumberExpr*>(stmt.getInitializer().get())) {
+            const BigInt& bigValue = numberExpr->getValue();
+            if (!TypeBounds::checkBounds(varType, bigValue)) {
+                throw std::runtime_error(
+                    "Value " + bigValue.toString() + " out of bounds for type " + 
+                    TypeBounds::getTypeName(varType) + ". " +
+                    "Valid range: " + TypeBounds::getTypeRange(varType)
+                );
+            }
+        }
+        
+        builder.CreateStore(initValue, alloca);
+    } else {
+        auto zero = ConstantInt::get(llvmVarType, 0);
+        builder.CreateStore(zero, alloca);
+    }
+
+    context.getNamedValues()[stmt.getVarName()] = alloca;
+    context.getVariableTypes()[stmt.getVarName()] = stmt.getVarType();
+
+    if (auto binaryCond = dynamic_cast<BinaryExpr*>(stmt.getCondition().get())) {
+        if (binaryCond->getOp() == BinaryOp::LESS) {
+            if (auto limitNum = dynamic_cast<NumberExpr*>(binaryCond->getRHS().get())) {
+                const BigInt& limit = limitNum->getValue();
+                
+                std::string typeRange = TypeBounds::getTypeRange(varType);
+                size_t toPos = typeRange.find(" to ");
+                if (toPos != std::string::npos) {
+                    try {
+                        int64_t maxVal = std::stoll(typeRange.substr(toPos + 4));
+                        BigInt maxBound(maxVal);
+                        
+                        if (limit > maxBound) {
+                            throw std::runtime_error(
+                                "For loop condition " + stmt.getVarName() + " < " + limit.toString() + 
+                                " would exceed bounds of type " + TypeBounds::getTypeName(varType) + 
+                                ". Valid range: " + typeRange
+                            );
+                        }
+                    } catch (...) {
+                        
+                    }
+                }
+            }
+        }
+        else if (binaryCond->getOp() == BinaryOp::LESS_EQUAL) {
+            if (auto limitNum = dynamic_cast<NumberExpr*>(binaryCond->getRHS().get())) {
+                const BigInt& limit = limitNum->getValue();
+                
+                std::string typeRange = TypeBounds::getTypeRange(varType);
+                size_t toPos = typeRange.find(" to ");
+                if (toPos != std::string::npos) {
+                    try {
+                        int64_t maxVal = std::stoll(typeRange.substr(toPos + 4));
+                        BigInt maxBound(maxVal);
+                        
+                        if (limit > maxBound) {
+                            throw std::runtime_error(
+                                "For loop condition " + stmt.getVarName() + " <= " + limit.toString() + 
+                                " would exceed bounds of type " + TypeBounds::getTypeName(varType) + 
+                                ". Valid range: " + typeRange
+                            );
+                        }
+                    } catch (...) {
+                        
+                    }
+                }
+            }
+        }
+    }
+   
+    builder.CreateBr(conditionBlock);
+   
+    builder.SetInsertPoint(conditionBlock);
+    auto condValue = stmt.getCondition()->codegen(context);
+
+    if (!condValue->getType()->isIntegerTy(1)) {
+        if (condValue->getType()->isIntegerTy()) {
+            condValue = builder.CreateICmpNE(condValue,
+                ConstantInt::get(condValue->getType(), 0));
+        } else {
+            throw std::runtime_error("For loop condition must be a boolean or integer type");
+        }
+    }
+   
+    builder.CreateCondBr(condValue, bodyBlock, afterBlock);
+   
+    currentFunction->insert(currentFunction->end(), bodyBlock);
+    builder.SetInsertPoint(bodyBlock);
+   
+    for (auto& bodyStmt : stmt.getBody()->getStatements()) {
+        bodyStmt->codegen(context);
+    }
+   
+
+    if (!builder.GetInsertBlock()->getTerminator()) {
+        builder.CreateBr(incrementBlock);
+    }
+   
+    currentFunction->insert(currentFunction->end(), incrementBlock);
+    builder.SetInsertPoint(incrementBlock);
+   
+    if (stmt.getIncrement()) {
+        auto incrementValue = stmt.getIncrement()->codegen(context);
+        if (incrementValue) {
+            if (auto numberExpr = dynamic_cast<NumberExpr*>(stmt.getIncrement().get())) {
+                const BigInt& bigValue = numberExpr->getValue();
+                if (!TypeBounds::checkBounds(varType, bigValue)) {
+                    throw std::runtime_error(
+                        "Increment value " + bigValue.toString() + " out of bounds for type " + 
+                        TypeBounds::getTypeName(varType) + ". " +
+                        "Valid range: " + TypeBounds::getTypeRange(varType)
+                    );
+                }
+            }
+            
+            builder.CreateStore(incrementValue, alloca);
+        }
+    }
+   
+    builder.CreateBr(conditionBlock);
+   
+    currentFunction->insert(currentFunction->end(), afterBlock);
+    builder.SetInsertPoint(afterBlock);
+   
+    context.exitScope();
+   
+    return nullptr;
+}

@@ -79,3 +79,7 @@ llvm::Value* ReturnStmt::codegen(::CodeGen& context) {
 llvm::Value* WhileStmt::codegen(::CodeGen& context) {
     return context.codegen(*this);
 }
+
+llvm::Value* ForLoopStmt::codegen(::CodeGen& context) {
+    return context.codegen(*this);
+}
