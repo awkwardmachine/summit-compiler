@@ -320,9 +320,9 @@ public:
                  std::vector<std::pair<std::string, VarType>> parameters,
                  VarType returnType,
                  std::unique_ptr<BlockStmt> body,
-                 bool isEntryPoint = false)R
+                 bool isEntryPoint = false)
         : name(name), parameters(std::move(parameters)), 
-          returnType(returnType), body(std::move(body)), isEntryPoint(isEntryPoint) {}
+          returnType(returnType), body(std::move(body)), isEntryPoint(isEntryPoint) {};
     
     llvm::Value* codegen(::CodeGen& context) override;
     

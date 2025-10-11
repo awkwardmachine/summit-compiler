@@ -475,19 +475,20 @@ llvm::Value* StatementCodeGen::codegenFunctionStmt(CodeGen& context, FunctionStm
             idx++;
         }
         
+        // Generate function body
         stmt.getBody()->codegen(context);
         
-        if (!builder.GetInsertBlock()->getTerminator()) {
+        // Check if we need to add a return instruction
+        auto currentBlock = builder.GetInsertBlock();
+        if (!currentBlock->getTerminator()) {
             if (stmt.getReturnType() == VarType::VOID) {
                 builder.CreateRetVoid();
             } else {
-                llvm::Value* defaultReturn = createDefaultValue(returnType, stmt.getReturnType());
-                if (defaultReturn) {
-                    builder.CreateRet(defaultReturn);
-                } else {
-                    throw std::runtime_error("Function '" + stmt.getName() + 
-                                           "' is missing a return statement");
-                }
+                // For non-void functions, check if all code paths return
+                throw std::runtime_error("Function '" + stmt.getName() + 
+                                       "' with return type '" + 
+                                       TypeBounds::getTypeName(stmt.getReturnType()) + 
+                                       "' must return a value on all code paths");
             }
         }
         
@@ -505,7 +506,6 @@ llvm::Value* StatementCodeGen::codegenFunctionStmt(CodeGen& context, FunctionStm
     
     return function;
 }
-
 
 llvm::Value* StatementCodeGen::codegenBlockStmt(CodeGen& context, BlockStmt& stmt) {
     auto& builder = context.getBuilder();
