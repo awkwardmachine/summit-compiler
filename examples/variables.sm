@@ -1,11 +1,8 @@
-var x: int8 = 5;
+const lib = @import("std");
 
 func main() -> int32
-    for (i: int4 = 0; i < 7; i += 4) do
-        @println("i = " + (i as str));
-    end
-
-    @println(x);
-
+    const output = lib.io;
+    output.println("Hello, world!");
+    lib.io.println("Also hi");
     ret 0;
 end

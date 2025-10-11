@@ -18,9 +18,6 @@ CodeGen::CodeGen() {
 
     // Start global scope
     enterScope();
-    
-    // Create builtin functions like printf and println
-    createPrintlnFunction();
 }
 
 /* Convert AST types to LLVM types */
@@ -49,6 +46,8 @@ llvm::Type* CodeGen::getLLVMType(AST::VarType type) {
         case AST::VarType::FLOAT64: return Type::getDoubleTy(context);
         case AST::VarType::STRING: return PointerType::get(Type::getInt8Ty(context), 0);
         case AST::VarType::VOID: return Type::getVoidTy(context);
+        case AST::VarType::MODULE: 
+            return StructType::create(context, "module_t");
         default: throw std::runtime_error("Unknown type");
     }
 }
@@ -181,6 +180,14 @@ llvm::Value* CodeGen::codegen(WhileStmt& stmt) {
 }
 llvm::Value* CodeGen::codegen(ForLoopStmt& stmt) {
     return StatementCodeGen::codegenForLoopStmt(*this, stmt);
+}
+
+llvm::Value* CodeGen::codegen(AST::ModuleExpr& expr) {
+    return ExpressionCodeGen::codegenModule(*this, expr);
+}
+
+llvm::Value* CodeGen::codegen(AST::MemberAccessExpr& expr) {
+    return ExpressionCodeGen::codegenMemberAccess(*this, expr);
 }
 
 /* Print LLVM IR to stdout */

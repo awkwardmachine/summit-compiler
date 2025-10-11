@@ -16,12 +16,16 @@ unique_ptr<Expr> Parser::parseCastExpression() {
     }
     return expr;
 }
+
 unique_ptr<Expr> Parser::parsePrimary() {
     const Token& tok = peek();
 
-    // ADD THIS CHECK FIRST - if it's ENTRYPOINT, it should have been handled in parseStatement()
     if (check(TokenType::ENTRYPOINT)) {
         error("@entrypoint should be used as a standalone statement, not in an expression");
+    }
+
+    if (check(TokenType::BUILTIN) || (check(TokenType::IDENTIFIER) && peek().value == "@get")) {
+        return parseBuiltinCall();
     }
 
     if (match(TokenType::NUMBER)) 
@@ -71,6 +75,12 @@ unique_ptr<Expr> Parser::parsePrimary() {
 
     if (match(TokenType::IDENTIFIER)) {
         string name = tokens[current - 1].value;
+        
+        if (match(TokenType::DOT)) {
+            auto object = make_unique<VariableExpr>(name);
+            return parseMemberAccess(move(object));
+        }
+        
         if (match(TokenType::LPAREN)) {
             vector<unique_ptr<Expr>> args;
             if (!check(TokenType::RPAREN)) {
@@ -199,4 +209,62 @@ unique_ptr<Expr> Parser::parseBinaryExpression(int minPrecedence) {
         left = make_unique<BinaryExpr>(op, move(left), move(right));
     }
     return left;
+}
+
+unique_ptr<Expr> Parser::parseMemberAccess(unique_ptr<Expr> object) {
+    if (!match(TokenType::IDENTIFIER)) {
+        error("Expected identifier after '.'");
+    }
+    string member = tokens[current - 1].value;
+
+    auto memberAccess = make_unique<MemberAccessExpr>(move(object), member);
+
+    if (match(TokenType::LPAREN)) {
+        vector<unique_ptr<Expr>> args;
+        if (!check(TokenType::RPAREN)) {
+            do { args.push_back(parseExpression()); } while(match(TokenType::COMMA));
+        }
+        if (!match(TokenType::RPAREN)) error("Expected ')' after function arguments");
+        return make_unique<CallExpr>(move(memberAccess), move(args));
+    }
+
+    if (match(TokenType::DOT)) {
+        return parseMemberAccess(move(memberAccess));
+    }
+    
+    return memberAccess;
+}
+
+unique_ptr<Expr> Parser::parseBuiltinCall() {
+    if (!match(TokenType::BUILTIN)) error("Expected '@' for builtin call");
+    
+    string builtinToken = tokens[current - 1].value;
+    string funcName;
+    
+    if (builtinToken.length() > 1 && builtinToken[0] == '@') {
+        funcName = builtinToken.substr(1);
+    } else {
+        if (!check(TokenType::IDENTIFIER)) error("Expected builtin function name after '@'");
+        funcName = advance().value;
+    }
+    
+    if (funcName == "import") {
+        if (!match(TokenType::LPAREN)) error("Expected '(' after @import");
+        
+        if (!match(TokenType::STRING_LITERAL)) error("Expected string literal for module name");
+        string moduleName = tokens[current - 1].value;
+        
+        if (!match(TokenType::RPAREN)) error("Expected ')' after module name");
+        
+        return make_unique<ModuleExpr>(moduleName);
+    }
+    
+    if (!match(TokenType::LPAREN)) error("Expected '(' after @" + funcName);
+    vector<unique_ptr<Expr>> args;
+    if (!check(TokenType::RPAREN)) {
+        do { args.push_back(parseExpression()); } while(match(TokenType::COMMA));
+    }
+    if (!match(TokenType::RPAREN)) error("Expected ')' after arguments");
+    
+    return make_unique<CallExpr>("@" + funcName, move(args));
 }

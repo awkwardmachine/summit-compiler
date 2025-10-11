@@ -5,6 +5,7 @@
 #include "codegen/bounds.h"
 #include <llvm/IR/Verifier.h>
 #include <iostream>
+#include "stdlib.h"
 #include <regex>
 #include <vector>
 #include <sstream>
@@ -123,6 +124,11 @@ llvm::Value* ExpressionCodeGen::codegenVariable(CodeGen& context, VariableExpr& 
     
     auto& builder = context.getBuilder();
 
+    if (varType == VarType::MODULE) {
+        std::cout << "DEBUG: Returning module pointer directly for: " << expr.getName() << std::endl;
+        return var;
+    }
+    
     llvm::Type* loadType = context.getLLVMType(varType);
     if (!loadType) {
         throw std::runtime_error("Unknown variable type for: " + expr.getName());
@@ -136,7 +142,6 @@ llvm::Value* ExpressionCodeGen::codegenVariable(CodeGen& context, VariableExpr& 
     
     return loadedValue;
 }
-
 llvm::Value* ExpressionCodeGen::codegenUnary(CodeGen& context, UnaryExpr& expr) {
     auto& builder = context.getBuilder();
     auto operand = expr.getOperand()->codegen(context);
@@ -419,86 +424,60 @@ llvm::Value* ExpressionCodeGen::codegenBinary(CodeGen& context, BinaryExpr& expr
         default: throw std::runtime_error("Unknown binary operator");
     }
 }
+
 llvm::Value* ExpressionCodeGen::codegenCall(CodeGen& context, CallExpr& expr) {
     auto& module = context.getModule();
     auto& builder = context.getBuilder();
     auto& llvmContext = context.getContext();
 
-    if (expr.getCallee()[0] == '@') {
-        if (expr.getCallee() == "@dec") {
-            if (expr.getArgs().size() != 1) {
-                throw std::runtime_error("@dec expects exactly one argument");
-            }
-            auto value = expr.getArgs()[0]->codegen(context);
-            return AST::convertToDecimalString(context, value);
-        }
-
-        if (expr.getCallee() == "@bin") {
-            if (expr.getArgs().size() != 1) {
-                throw std::runtime_error("@bin expects exactly one argument");
-            }
-            auto value = expr.getArgs()[0]->codegen(context);
-            return AST::convertToBinaryString(context, value);
+    if (expr.getCalleeExpr()) {
+        auto calleeValue = expr.getCalleeExpr()->codegen(context);
+        
+        bool isPrintln = false;
+        if (auto* func = dyn_cast<Function>(calleeValue)) {
+            isPrintln = (func->getName() == "io_println_str");
         }
         
-        if (expr.getCallee() == "@print" || expr.getCallee() == "@println") {
-            if (expr.getArgs().size() < 1) {
-                throw std::runtime_error("print/println expects at least one argument");
+        std::vector<llvm::Value*> args;
+        for (auto& argExpr : expr.getArgs()) {
+            auto argValue = argExpr->codegen(context);
+            
+            if (isPrintln && !argValue->getType()->isPointerTy()) {
+                argValue = AST::convertToString(context, argValue);
             }
             
-            auto printfFunc = module.getFunction("printf");
-            if (!printfFunc) {
-                auto* i32 = Type::getInt32Ty(llvmContext);
-                auto* i8Ptr = PointerType::get(Type::getInt8Ty(llvmContext), 0);
-                auto printfType = FunctionType::get(i32, {i8Ptr}, true);
-                printfFunc = Function::Create(printfType, Function::ExternalLinkage, "printf", &module);
-            }
+            args.push_back(argValue);
+        }
 
-            if (auto* formatExpr = dynamic_cast<FormatStringExpr*>(expr.getArgs()[0].get())) {
-                auto result = formatExpr->codegen(context);
-                
-                if (expr.getCallee() == "@println") {
-                    const std::string& formatStr = formatExpr->getFormatStr();
-                    if (!formatStr.empty() && formatStr.back() != '\n') {
-                        auto newlineStr = builder.CreateGlobalStringPtr("\n");
-                        builder.CreateCall(printfFunc, {newlineStr});
-                    }
-                }
-                
-                return result;
+        if (auto* func = dyn_cast<Function>(calleeValue)) {
+            FunctionCallee callee(func->getFunctionType(), func);
+            return builder.CreateCall(callee, args);
+        } else {
+            if (calleeValue->getType()->isPointerTy()) {
+                auto funcType = FunctionType::get(
+                    Type::getVoidTy(llvmContext),
+                    {PointerType::get(Type::getInt8Ty(llvmContext), 0)},
+                    false
+                );
+                FunctionCallee callee(funcType, calleeValue);
+                return builder.CreateCall(callee, args);
+            } else {
+                throw std::runtime_error("Expected function pointer for member function call");
             }
+        }
+    }
 
-            std::vector<llvm::Value*> printfArgs;
-
-            std::string formatStr;
-            for (size_t i = 0; i < expr.getArgs().size(); i++) {
-                if (i > 0) formatStr += " ";
-                formatStr += "%s";
-            }
-            
-            if (expr.getCallee() == "@println") {
-                formatStr += "\n";
-            }
-            
-            auto formatStrPtr = builder.CreateGlobalStringPtr(formatStr);
-            printfArgs.push_back(formatStrPtr);
-            
-            for (size_t i = 0; i < expr.getArgs().size(); i++) {
-                auto argValue = expr.getArgs()[i]->codegen(context);
-                if (!argValue) {
-                    throw std::runtime_error("Failed to generate argument " + std::to_string(i) + " for " + expr.getCallee());
-                }
-                auto stringValue = AST::convertToString(context, argValue);
-                if (!stringValue) {
-                    throw std::runtime_error("Failed to convert argument " + std::to_string(i) + " to string");
-                }
-                printfArgs.push_back(stringValue);
-            }
-            
-            return builder.CreateCall(printfFunc, printfArgs);
+    if (expr.getCallee() == "println" && expr.getArgs().size() == 1) {
+        auto argValue = expr.getArgs()[0]->codegen(context);
+        auto stringValue = AST::convertToString(context, argValue);
+        
+        auto& module = context.getModule();
+        auto printlnFunc = module.getFunction("io_println_str");
+        if (!printlnFunc) {
+            throw std::runtime_error("println function not found");
         }
         
-        throw std::runtime_error("Unknown builtin function: " + expr.getCallee());
+        return builder.CreateCall(printlnFunc, {stringValue});
     }
     
     auto func = module.getFunction(expr.getCallee());
@@ -683,15 +662,24 @@ llvm::Value* ExpressionCodeGen::codegenFormatString(CodeGen& context, FormatStri
     auto& module = context.getModule();
     auto& builder = context.getBuilder();
     auto& llvmContext = context.getContext();
+
+    auto* i8Ptr = PointerType::get(Type::getInt8Ty(llvmContext), 0);
+    auto* sizeT = Type::getInt64Ty(llvmContext);
+    auto* i32 = Type::getInt32Ty(llvmContext);
     
-    auto printfFunc = module.getFunction("printf");
-    if (!printfFunc) {
-        auto* i32 = Type::getInt32Ty(llvmContext);
-        auto* i8Ptr = PointerType::get(Type::getInt8Ty(llvmContext), 0);
-        auto printfType = FunctionType::get(i32, {i8Ptr}, true);
-        printfFunc = Function::Create(printfType, Function::ExternalLinkage, "printf", &module);
+    auto snprintfFunc = module.getFunction("snprintf");
+    if (!snprintfFunc) {
+        std::vector<Type*> snprintfParams = {i8Ptr, sizeT, i8Ptr};
+        auto snprintfType = FunctionType::get(i32, snprintfParams, true);
+        snprintfFunc = Function::Create(snprintfType, Function::ExternalLinkage, "snprintf", &module);
     }
-    
+
+    auto mallocFunc = module.getFunction("malloc");
+    if (!mallocFunc) {
+        auto mallocType = FunctionType::get(i8Ptr, {sizeT}, false);
+        mallocFunc = Function::Create(mallocType, Function::ExternalLinkage, "malloc", &module);
+    }
+
     std::string formatSpecifiers;
     size_t lastPos = 0;
     const std::string& formatStr = expr.getFormatStr();
@@ -716,15 +704,135 @@ llvm::Value* ExpressionCodeGen::codegenFormatString(CodeGen& context, FormatStri
         formatSpecifiers += formatStr.substr(lastPos);
     }
 
-    std::vector<llvm::Value*> printfArgs;
-    auto formatStrPtr = builder.CreateGlobalStringPtr(formatSpecifiers);
-    printfArgs.push_back(formatStrPtr);
-    
-    for (auto& expr : expr.getExpressions()) {
-        auto exprValue = expr->codegen(context);
+    std::vector<llvm::Value*> stringArgs;
+    for (auto& exprPtr : expr.getExpressions()) {
+        auto exprValue = exprPtr->codegen(context);
         auto stringValue = AST::convertToString(context, exprValue);
-        printfArgs.push_back(stringValue);
+        stringArgs.push_back(stringValue);
+    }
+    
+    auto bufferSize = ConstantInt::get(sizeT, 256);
+    auto buffer = builder.CreateCall(mallocFunc, {bufferSize});
+    
+    auto formatStrPtr = builder.CreateGlobalStringPtr(formatSpecifiers);
+    
+    std::vector<llvm::Value*> snprintfArgs;
+    snprintfArgs.push_back(buffer);
+    snprintfArgs.push_back(bufferSize);
+    snprintfArgs.push_back(formatStrPtr);
+    
+    for (auto stringArg : stringArgs) {
+        snprintfArgs.push_back(stringArg);
+    }
+    
+    builder.CreateCall(snprintfFunc, snprintfArgs);
+    
+    return buffer;
+}
+
+llvm::Value* ExpressionCodeGen::codegenModule(CodeGen& context, ModuleExpr& expr) {
+    const std::string& moduleName = expr.getModuleName();
+    
+    if (moduleName == "std") {
+        StandardLibrary::initialize(context);
+        
+        auto module = context.lookupVariable("std");
+        if (!module) {
+            throw std::runtime_error("Standard library module not found");
+        }
+        return module;
+    }
+    
+    throw std::runtime_error("Unknown module: " + moduleName);
+}
+llvm::Value* ExpressionCodeGen::codegenMemberAccess(CodeGen& context, MemberAccessExpr& expr) {
+    auto object = expr.getObject()->codegen(context);
+    const std::string& member = expr.getMember();
+
+    if (auto* globalVar = llvm::dyn_cast<llvm::GlobalVariable>(object)) {
+        std::string moduleName = globalVar->getName().str();
+        
+        if (context.lookupVariable(moduleName)) {
+            auto varType = context.lookupVariableType(moduleName);
+            if (varType == AST::VarType::MODULE) {
+                std::string actualModuleName = context.getModuleIdentity(moduleName);
+                if (!actualModuleName.empty() && actualModuleName != moduleName) {
+                    return handleModuleMemberAccess(context, actualModuleName, member);
+                }
+            }
+        }
+        
+        return handleModuleMemberAccess(context, moduleName, member);
+    }
+    
+    if (auto* varExpr = dynamic_cast<AST::VariableExpr*>(expr.getObject().get())) {
+        std::string varName = varExpr->getName();
+        
+        auto varType = context.lookupVariableType(varName);
+        if (varType == AST::VarType::MODULE) {
+            std::string actualModuleName = extractModuleName(context, varName);
+            return handleModuleMemberAccess(context, actualModuleName, member);
+        }
+    }
+    
+    if (auto* memberAccess = dynamic_cast<AST::MemberAccessExpr*>(expr.getObject().get())) {
+        auto baseObject = memberAccess->codegen(context);
+        
+        if (auto* globalVar = llvm::dyn_cast<llvm::GlobalVariable>(baseObject)) {
+            std::string baseModuleName = globalVar->getName().str();
+            return handleModuleMemberAccess(context, baseModuleName, member);
+        }
+    }
+    
+    throw std::runtime_error("Unknown member access: " + member);
+}
+
+std::string ExpressionCodeGen::extractModuleName(CodeGen& context, const std::string& varName) {
+    std::string actualName = context.getModuleIdentity(varName);
+    if (!actualName.empty()) {
+        return actualName;
     }
 
-    return builder.CreateCall(printfFunc, printfArgs);
+    return varName;
+}
+
+llvm::Value* ExpressionCodeGen::handleModuleMemberAccess(CodeGen& context, const std::string& moduleName, const std::string& member) {
+    std::string actualModuleName = moduleName;
+
+    size_t dotPos = actualModuleName.find('.');
+    if (dotPos != std::string::npos) {
+        actualModuleName = actualModuleName.substr(0, dotPos);
+    }
+
+    if (context.lookupVariable(moduleName)) {
+        auto varType = context.lookupVariableType(moduleName);
+        if (varType == AST::VarType::MODULE) {
+            std::string resolvedName = context.getModuleIdentity(moduleName);
+            if (!resolvedName.empty()) {
+                actualModuleName = resolvedName;
+            }
+        }
+    }
+    
+    if (actualModuleName == "std") {
+        if (member == "io") {
+            auto ioModule = context.lookupVariable("io");
+            if (!ioModule) {
+                throw std::runtime_error("IO module not found");
+            }
+            return ioModule;
+        }
+    } 
+    else if (actualModuleName == "io") {
+        if (member == "println") {
+            auto& module = context.getModule();
+            auto printlnFunc = module.getFunction("io_println_str");
+            if (!printlnFunc) {
+                throw std::runtime_error("println function not found");
+            }
+            return printlnFunc;
+        }
+    }
+    
+    throw std::runtime_error("Unknown member '" + member + "' in module '" + actualModuleName + "'");
 }

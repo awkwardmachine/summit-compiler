@@ -16,6 +16,27 @@ namespace AST {
         return VarType::VOID;
     }
 
+    VarType inferTypeFromValue(llvm::Value* value, CodeGen& context) {
+        if (auto* globalVar = llvm::dyn_cast<llvm::GlobalVariable>(value)) {
+            std::string name = globalVar->getName().str();
+            
+            if (name == "std" || name == "io") {
+                return VarType::MODULE;
+            }
+            
+            if (globalVar->getValueType()->isStructTy()) {
+                if (auto* structType = llvm::dyn_cast<llvm::StructType>(globalVar->getValueType())) {
+                    std::string typeName = structType->getName().str();
+                    if (typeName.find("module_t") != std::string::npos) {
+                        return VarType::MODULE;
+                    }
+                }
+            }
+        }
+        
+        return inferSourceType(value, context);
+    }
+
     bool isConvertibleToString(llvm::Value* value) {
         return value->getType()->isIntegerTy() || 
                value->getType()->isIntegerTy(1);

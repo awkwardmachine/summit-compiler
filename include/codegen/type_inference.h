@@ -5,4 +5,5 @@
 namespace AST {
     VarType inferSourceType(llvm::Value* value, CodeGen& context);
     bool isConvertibleToString(llvm::Value* value);
+    VarType inferTypeFromValue(llvm::Value* value, CodeGen& context);
 }

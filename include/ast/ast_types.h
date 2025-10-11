@@ -23,6 +23,7 @@ namespace AST {
         FLOAT32,
         FLOAT64,
         STRING,
+        MODULE,
         VOID
     };
 

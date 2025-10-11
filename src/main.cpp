@@ -11,6 +11,7 @@
 #include "parser/parser.h"
 #include "codegen/codegen.h"
 #include "ast/ast.h"
+#include "codegen/stdlib.h"
 
 using namespace std;
 
@@ -178,6 +179,9 @@ int main(int argc, char* argv[]) {
         }
 
         CodeGen codegen;
+
+        StandardLibrary::initialize(codegen);
+        
         ast->codegen(codegen);
 
         if (printIR) {

@@ -8,6 +8,9 @@
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Module.h>
 #include "ast/ast_types.h"
+#include <map>           // ADD THIS
+#include <iostream>      // ADD THIS
+#include <unordered_map>
 
 namespace AST {
     enum class VarType;
@@ -30,6 +33,8 @@ namespace AST {
     class ReturnStmt;
     class WhileStmt;
     class ForLoopStmt;
+    class ModuleExpr;
+    class MemberAccessExpr;
     class Program;
 }
 
@@ -42,7 +47,9 @@ class CodeGen {
     std::vector<std::unordered_map<std::string, llvm::Value*>> namedValuesStack;
     std::vector<std::unordered_map<std::string, AST::VarType>> variableTypesStack;
     std::vector<std::unordered_set<std::string>> constVariablesStack;
-
+    std::map<std::string, llvm::Value*> moduleReferences;
+    std::map<std::string, std::string> moduleIdentities; // FIXED: now with proper includes
+    std::unordered_map<std::string, llvm::Value*> moduleReferencesMap;
 public:
     CodeGen();
     
@@ -81,6 +88,8 @@ public:
     llvm::Value* codegen(AST::CallExpr& expr);
     llvm::Value* codegen(AST::CastExpr& expr);
     llvm::Value* codegen(AST::BooleanExpr& expr);
+    llvm::Value* codegen(AST::ModuleExpr& expr);
+    llvm::Value* codegen(AST::MemberAccessExpr& expr);
     
     /* Statement code generation methods */
     llvm::Value* codegen(AST::VariableDecl& decl);
@@ -97,4 +106,31 @@ public:
     /* Debugging and output methods */
     void printIR();
     void printIRToFile(const std::string& filename);
+
+    void setModuleReference(const std::string& varName, llvm::Value* module, const std::string& actualModuleName) {
+        moduleReferences[varName] = module;
+        moduleIdentities[varName] = actualModuleName;
+        std::cout << "DEBUG: Tracked module alias: " << varName << " -> " << actualModuleName << std::endl;
+    }
+    
+    llvm::Value* getModuleReference(const std::string& varName) const {
+        auto it = moduleReferences.find(varName);
+        if (it != moduleReferences.end()) {
+            return it->second;
+        }
+        return nullptr;
+    }
+    
+    std::string getModuleIdentity(const std::string& varName) const {
+        auto it = moduleIdentities.find(varName);
+        if (it != moduleIdentities.end()) {
+            return it->second;
+        }
+        return "";
+    }
+    
+    void clearModuleReferences() {
+        moduleReferences.clear();
+        moduleIdentities.clear();
+    }
 };

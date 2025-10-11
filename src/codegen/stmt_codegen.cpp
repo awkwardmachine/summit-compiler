@@ -42,7 +42,44 @@ llvm::Value* StatementCodeGen::codegenGlobalVariable(CodeGen& context, VariableD
     llvm::Constant* initialValue = nullptr;
     
     if (decl.getValue()) {
-        if (auto numberExpr = dynamic_cast<NumberExpr*>(decl.getValue().get())) {
+        if (auto* moduleExpr = dynamic_cast<ModuleExpr*>(decl.getValue().get())) {
+            const std::string& moduleName = moduleExpr->getModuleName();
+            
+            if (moduleName == "std") {
+                if (auto* structType = dyn_cast<StructType>(varType)) {
+                    initialValue = ConstantStruct::get(structType, {});
+                } else {
+                    initialValue = ConstantAggregateZero::get(varType);
+                }
+                
+                auto globalVar = new llvm::GlobalVariable(
+                    module,
+                    varType,
+                    decl.getIsConst(),
+                    llvm::GlobalValue::ExternalLinkage,
+                    initialValue,
+                    decl.getName()
+                );
+                
+                context.getNamedValues()[decl.getName()] = globalVar;
+                context.getVariableTypes()[decl.getName()] = decl.getType();
+                
+                auto stdModule = context.lookupVariable("std");
+                if (stdModule) {
+                    context.setModuleReference(decl.getName(), stdModule, "std");
+                    std::cout << "DEBUG: Created global module alias: " << decl.getName() << " -> std" << std::endl;
+                }
+                
+                if (decl.getIsConst()) {
+                    context.getConstVariables().insert(decl.getName());
+                }
+                
+                return globalVar;
+            } else {
+                throw std::runtime_error("Unknown module: " + moduleName);
+            }
+        }
+        else if (auto numberExpr = dynamic_cast<NumberExpr*>(decl.getValue().get())) {
             const BigInt& bigValue = numberExpr->getValue();
             if (!TypeBounds::checkBounds(decl.getType(), bigValue)) {
                 throw std::runtime_error(
@@ -107,6 +144,13 @@ llvm::Value* StatementCodeGen::codegenGlobalVariable(CodeGen& context, VariableD
             initialValue = llvm::ConstantDataArray::getString(llvmContext, "");
             varType = initialValue->getType();
         }
+        else if (decl.getType() == VarType::MODULE) {
+            if (auto* structType = dyn_cast<StructType>(varType)) {
+                initialValue = ConstantStruct::get(structType, {});
+            } else {
+                initialValue = ConstantAggregateZero::get(varType);
+            }
+        }
         else {
             initialValue = ConstantInt::get(varType, 0);
         }
@@ -130,7 +174,6 @@ llvm::Value* StatementCodeGen::codegenGlobalVariable(CodeGen& context, VariableD
     
     return globalVar;
 }
-
 llvm::Value* StatementCodeGen::codegenVariableDecl(CodeGen& context, VariableDecl& decl) {
     auto& builder = context.getBuilder();
     auto currentFunction = builder.GetInsertBlock() ? builder.GetInsertBlock()->getParent() : nullptr;
@@ -141,6 +184,64 @@ llvm::Value* StatementCodeGen::codegenVariableDecl(CodeGen& context, VariableDec
     
     if (decl.getType() == VarType::VOID) {
         throw std::runtime_error("Cannot declare variable of type 'void'");
+    }
+
+    if (decl.getValue()) {
+        auto value = decl.getValue()->codegen(context);
+        if (!value) {
+            throw std::runtime_error("Failed to generate value for variable: " + decl.getName());
+        }
+        
+        bool isModule = false;
+        llvm::Value* actualModule = value;
+        std::string actualModuleName = "unknown";
+        
+        if (auto* globalVar = llvm::dyn_cast<llvm::GlobalVariable>(value)) {
+            std::string name = globalVar->getName().str();
+
+            if (name == "std" || name.find("std") == 0) {
+                isModule = true;
+                actualModule = globalVar;
+                actualModuleName = "std";
+            }
+            else if (name == "io" || name.find("io") == 0) {
+                isModule = true;
+                actualModule = globalVar;
+                actualModuleName = "io";
+            }
+            else if (globalVar->getValueType()->isStructTy()) {
+                if (auto* structType = llvm::dyn_cast<llvm::StructType>(globalVar->getValueType())) {
+                    std::string typeName = structType->getName().str();
+                    if (typeName.find("module_t") != std::string::npos) {
+                        isModule = true;
+                        actualModule = globalVar;
+                        if (name.find("std") == 0) {
+                            actualModuleName = "std";
+                        } else if (name.find("io") == 0) {
+                            actualModuleName = "io";
+                        } else {
+                            actualModuleName = name;
+                        }
+                    }
+                }
+            }
+        }
+        
+        if (isModule) {
+            context.getNamedValues()[decl.getName()] = value;
+            context.getVariableTypes()[decl.getName()] = AST::VarType::MODULE;
+            
+            // FIX: Always use the actual module name, not the variable name
+            context.setModuleReference(decl.getName(), actualModule, actualModuleName);
+            
+            std::cout << "DEBUG: Created module alias: " << decl.getName() << " -> " << actualModuleName << std::endl;
+            
+            if (decl.getIsConst()) {
+                context.getConstVariables().insert(decl.getName());
+            }
+            
+            return value;
+        }
     }
 
     auto varType = context.getLLVMType(decl.getType());

@@ -45,6 +45,8 @@ bool TypeBounds::checkBounds(VarType type, const BigInt& value) {
             return value == BigInt("0");
         case VarType::STRING:
             return true;
+        case VarType::MODULE:
+            return true;
         default:
             return false;
     }
@@ -91,6 +93,8 @@ std::string TypeBounds::getTypeRange(VarType type) {
             return "0 to 0";
         case VarType::STRING:
             return "string (no numeric bounds)";
+        case VarType::MODULE:
+            return "module (no numeric bounds)";
         default:
             return "unknown range";
     }
@@ -121,6 +125,7 @@ std::string TypeBounds::getTypeName(VarType type) {
         case VarType::FLOAT64: return "float64";
         case VarType::STRING: return "str";
         case VarType::VOID: return "void";
+        case VarType::MODULE: return "module";
         default: return "unknown";
     }
 }

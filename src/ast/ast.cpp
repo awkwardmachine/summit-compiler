@@ -83,3 +83,11 @@ llvm::Value* WhileStmt::codegen(::CodeGen& context) {
 llvm::Value* ForLoopStmt::codegen(::CodeGen& context) {
     return context.codegen(*this);
 }
+
+llvm::Value* ModuleExpr::codegen(::CodeGen& context) {
+    return context.codegen(*this);
+}
+
+llvm::Value* MemberAccessExpr::codegen(::CodeGen& context) {
+    return context.codegen(*this);
+}

@@ -14,21 +14,62 @@ unique_ptr<Stmt> Parser::parseEntrypointStatement() {
     return make_unique<EntrypointStmt>();
 }
 
-
 unique_ptr<Stmt> Parser::parseVariableDeclaration() {
     bool isConst = match(TokenType::CONST);
     if (!isConst && !match(TokenType::VAR)) error("Expected 'var' or 'const'");
     if (!match(TokenType::IDENTIFIER)) error("Expected variable name");
     string name = tokens[current - 1].value;
-    if (!match(TokenType::COLON)) error("Expected ':' after variable name");
-    VarType type = parseType();
+    
+    VarType type = VarType::VOID;
+    
+    if (check(TokenType::COLON)) {
+        advance();
+        type = parseType();
+    } else if (!isConst) {
+        error("Expected ':' and type annotation for variable '" + name + "'");
+    }
+    
     unique_ptr<Expr> value = nullptr;
-    if (match(TokenType::EQUALS)) value = parseExpression();
+    
+    if (match(TokenType::EQUALS)) {
+        value = parseExpression();
+        
+        if (isConst && type == VarType::VOID) {
+            if (auto* moduleExpr = dynamic_cast<ModuleExpr*>(value.get())) {
+                type = VarType::MODULE;
+            }
+            else if (auto* numberExpr = dynamic_cast<NumberExpr*>(value.get())) {
+                const BigInt& bigValue = numberExpr->getValue();
+                if (bigValue >= -128 && bigValue <= 127) type = VarType::INT8;
+                else if (bigValue >= -32768 && bigValue <= 32767) type = VarType::INT16;
+                else type = VarType::INT32;
+            }
+            else if (auto* stringExpr = dynamic_cast<StringExpr*>(value.get())) {
+                type = VarType::STRING;
+            }
+            else if (auto* boolExpr = dynamic_cast<BooleanExpr*>(value.get())) {
+                type = VarType::UINT0;
+            }
+            else if (auto* floatExpr = dynamic_cast<FloatExpr*>(value.get())) {
+                type = floatExpr->getFloatType();
+            }
+            else {
+                type = VarType::INT32;
+            }
+        }
+    } else if (isConst) {
+        error("Const variable '" + name + "' must be initialized");
+    } else {
+        if (type == VarType::VOID) {
+            error("Variable '" + name + "' must have a type annotation when not initialized");
+        }
+    }
     
     const Token& lastToken = tokens[current - 1];
     if (!match(TokenType::SEMICOLON)) {
         errorAt(lastToken, "Expected ';' after variable declaration");
     }
+    
     return make_unique<VariableDecl>(name, type, isConst, move(value));
 }
 
@@ -172,6 +213,7 @@ unique_ptr<Stmt> Parser::parseElseIfChain() {
     
     return make_unique<IfStmt>(move(condition), move(thenBlock), move(elseBranch));
 }
+
 unique_ptr<Stmt> Parser::parseFunctionDeclaration() {
     bool isEntryPoint = false;
     if (check(TokenType::ENTRYPOINT)) {

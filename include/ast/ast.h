@@ -185,19 +185,32 @@ public:
         return oss.str();
     }
 };
-
 class CallExpr : public Expr {
     std::string callee;
+    std::unique_ptr<Expr> calleeExpr;
     std::vector<std::unique_ptr<Expr>> args;
 public:
     CallExpr(const std::string& callee, std::vector<std::unique_ptr<Expr>> args)
         : callee(callee), args(std::move(args)) {}
+    
+    CallExpr(std::unique_ptr<Expr> calleeExpr, std::vector<std::unique_ptr<Expr>> args)
+        : calleeExpr(std::move(calleeExpr)), args(std::move(args)) {}
+    
     llvm::Value* codegen(::CodeGen& context) override;
+    
     const std::string& getCallee() const { return callee; }
+    const std::unique_ptr<Expr>& getCalleeExpr() const { return calleeExpr; }
     const std::vector<std::unique_ptr<Expr>>& getArgs() const { return args; }
+    
     std::string toString(int indent = 0) const override {
         std::ostringstream oss;
-        oss << indentStr(indent) << "CallExpr: " << quoted(callee) << " with " << args.size() << " arg(s)\n";
+        oss << indentStr(indent) << "CallExpr: ";
+        if (calleeExpr) {
+            oss << "(member call)";
+        } else {
+            oss << quoted(callee);
+        }
+        oss << " with " << args.size() << " arg(s)\n";
         for (const auto& arg : args)
             oss << arg->toString(indent + 1) << "\n";
         return oss.str();
@@ -440,6 +453,34 @@ public:
         std::ostringstream oss;
         oss << indentStr(indent) << "ReturnStmt\n";
         oss << (value ? value->toString(indent + 1) : indentStr(indent + 1) + "void");
+        return oss.str();
+    }
+};
+
+class ModuleExpr : public Expr {
+    std::string moduleName;
+public:
+    ModuleExpr(const std::string& name) : moduleName(name) {}
+    llvm::Value* codegen(::CodeGen& context) override;
+    const std::string& getModuleName() const { return moduleName; }
+    std::string toString(int indent = 0) const override {
+        return indentStr(indent) + "ModuleExpr: " + quoted(moduleName);
+    }
+};
+
+class MemberAccessExpr : public Expr {
+    std::unique_ptr<Expr> object;
+    std::string member;
+public:
+    MemberAccessExpr(std::unique_ptr<Expr> object, const std::string& member)
+        : object(std::move(object)), member(member) {}
+    llvm::Value* codegen(::CodeGen& context) override;
+    const std::unique_ptr<Expr>& getObject() const { return object; }
+    const std::string& getMember() const { return member; }
+    std::string toString(int indent = 0) const override {
+        std::ostringstream oss;
+        oss << indentStr(indent) << "MemberAccessExpr: ." << member << "\n";
+        oss << (object ? object->toString(indent + 1) : indentStr(indent + 1) + "null");
         return oss.str();
     }
 };

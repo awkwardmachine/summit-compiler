@@ -14,4 +14,8 @@ namespace ExpressionCodeGen {
     llvm::Value* codegenCast(CodeGen& context, AST::CastExpr& expr);
     llvm::Value* codegenUnary(CodeGen& context, AST::UnaryExpr& expr);
     llvm::Value* codegenFormatString(CodeGen& context, AST::FormatStringExpr& expr);
+    llvm::Value* codegenModule(CodeGen& context, AST::ModuleExpr& expr);
+    llvm::Value* codegenMemberAccess(CodeGen& context, AST::MemberAccessExpr& expr);
+    std::string extractModuleName(CodeGen& context, const std::string& varName);
+    llvm::Value* handleModuleMemberAccess(CodeGen& context, const std::string& moduleName, const std::string& member);
 }
