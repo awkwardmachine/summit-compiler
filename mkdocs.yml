@@ -4,7 +4,8 @@ theme:
   name: material
 nav:
   - Home: index.md
-  - Variables: variables.md
+  - Basics:
+      - Variables: variables.md
 markdown_extensions:
   - codehilite
   - toc:
