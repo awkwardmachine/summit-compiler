@@ -196,17 +196,23 @@ llvm::Value* ExpressionCodeGen::codegenBinary(CodeGen& context, BinaryExpr& expr
         bool rhsIsString = rhs->getType()->isPointerTy();
         
         if (lhsIsString || rhsIsString) {
-            if (!lhsIsString && !AST::isConvertibleToString(lhs)) {
-                throw std::runtime_error("Left operand cannot be converted to string for concatenation");
+            if (!lhsIsString) {
+                throw std::runtime_error(
+                    "Left operand must be a string for concatenation. " +
+                    std::string("Use 'as str' to explicitly convert: ") +
+                    "(left_expression as str) + right_expression"
+                );
             }
-            if (!rhsIsString && !AST::isConvertibleToString(rhs)) {
-                throw std::runtime_error("Right operand cannot be converted to string for concatenation");
+            if (!rhsIsString) {
+                throw std::runtime_error(
+                    "Right operand must be a string for concatenation. " +
+                    std::string("Use 'as str' to explicitly convert: ") +
+                    "left_expression + (right_expression as str)"
+                );
             }
             
             auto& module = context.getModule();
             auto& llvmContext = context.getContext();
-            llvm::Value* lhsStr = lhsIsString ? lhs : AST::convertToString(context, lhs);
-            llvm::Value* rhsStr = rhsIsString ? rhs : AST::convertToString(context, rhs);
             
             auto strlenFunc = module.getFunction("strlen");
             if (!strlenFunc) {
@@ -240,14 +246,14 @@ llvm::Value* ExpressionCodeGen::codegenBinary(CodeGen& context, BinaryExpr& expr
                 strcatFunc = Function::Create(funcType, Function::ExternalLinkage, "strcat", &module);
             }
             
-            auto lhsLen = builder.CreateCall(strlenFunc, {lhsStr});
-            auto rhsLen = builder.CreateCall(strlenFunc, {rhsStr});
+            auto lhsLen = builder.CreateCall(strlenFunc, {lhs});
+            auto rhsLen = builder.CreateCall(strlenFunc, {rhs});
             auto totalLen = builder.CreateAdd(lhsLen, rhsLen);
             auto bufferSize = builder.CreateAdd(totalLen, ConstantInt::get(llvmContext, APInt(64, 1)));
             
             auto buffer = builder.CreateCall(mallocFunc, {bufferSize});
-            builder.CreateCall(strcpyFunc, {buffer, lhsStr});
-            builder.CreateCall(strcatFunc, {buffer, rhsStr});
+            builder.CreateCall(strcpyFunc, {buffer, lhs});
+            builder.CreateCall(strcatFunc, {buffer, rhs});
             
             return buffer;
         }
