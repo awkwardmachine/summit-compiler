@@ -16,9 +16,13 @@ unique_ptr<Expr> Parser::parseCastExpression() {
     }
     return expr;
 }
-
 unique_ptr<Expr> Parser::parsePrimary() {
     const Token& tok = peek();
+
+    // ADD THIS CHECK FIRST - if it's ENTRYPOINT, it should have been handled in parseStatement()
+    if (check(TokenType::ENTRYPOINT)) {
+        error("@entrypoint should be used as a standalone statement, not in an expression");
+    }
 
     if (match(TokenType::NUMBER)) 
         return make_unique<NumberExpr>(tokens[current - 1].value);

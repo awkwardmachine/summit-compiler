@@ -231,6 +231,7 @@ llvm::Value* StatementCodeGen::codegenProgram(CodeGen& context, Program& program
     auto& llvmContext = context.getContext();
     
     std::cout << "DEBUG: First pass - generating all functions" << std::endl;
+    
     for (size_t i = 0; i < program.getStatements().size(); i++) {
         auto& stmt = program.getStatements()[i];
         if (auto* funcStmt = dynamic_cast<FunctionStmt*>(stmt.get())) {
@@ -239,116 +240,192 @@ llvm::Value* StatementCodeGen::codegenProgram(CodeGen& context, Program& program
         }
     }
     
-    llvm::Function* userMainFunc = module.getFunction("main");
-    bool hasUserMain = (userMainFunc != nullptr);
-    
-    if (hasUserMain) {
-        std::cout << "DEBUG: Found user-defined main() function" << std::endl;
+    if (program.getHasEntryPoint()) {
+        const std::string& entryPointName = program.getEntryPointFunction();
+        std::cout << "DEBUG: Using entry point function: " << entryPointName << std::endl;
         
-        auto returnType = userMainFunc->getReturnType();
+        llvm::Function* entryFunc = module.getFunction(entryPointName);
+        if (!entryFunc) {
+            throw std::runtime_error("Entry point function '" + entryPointName + "' not found in module");
+        }
+        
+        auto returnType = entryFunc->getReturnType();
         bool isValidReturnType = returnType->isIntegerTy(32) || 
                                  returnType->isVoidTy() || 
                                  returnType->isIntegerTy(1);
         
         if (!isValidReturnType) {
             throw std::runtime_error(
-                "main() function must return int32, void, or uint0"
+                "Entry point function must return int32, void, or uint0"
             );
         }
         
-        if (userMainFunc->arg_size() != 0) {
+        if (entryFunc->arg_size() != 0) {
             throw std::runtime_error(
-                "main() function should not take any parameters (got " + 
-                std::to_string(userMainFunc->arg_size()) + " parameters)"
+                "Entry point function should not take any parameters (got " + 
+                std::to_string(entryFunc->arg_size()) + " parameters)"
             );
         }
-        
-        if (returnType->isVoidTy() || returnType->isIntegerTy(1)) {
-            if (returnType->isVoidTy()) {
-                std::cout << "DEBUG: main() returns void, creating wrapper" << std::endl;
-            } else {
-                std::cout << "DEBUG: main() returns uint0, creating wrapper" << std::endl;
-            }
-            
-            userMainFunc->setName("__user_main");
 
+        if (returnType->isVoidTy() || returnType->isIntegerTy(1)) {
+            std::cout << "DEBUG: Creating wrapper for entry point function" << std::endl;
+            
+            entryFunc->setName("__entry_" + entryPointName);
+            
             auto mainFuncType = llvm::FunctionType::get(
                 llvm::Type::getInt32Ty(llvmContext), 
                 false
             );
-            auto wrapperMain = llvm::Function::Create(
+            auto mainFunc = llvm::Function::Create(
                 mainFuncType,
                 llvm::Function::ExternalLinkage,
                 "main",
                 &module
             );
             
-            auto entryBlock = llvm::BasicBlock::Create(llvmContext, "entry", wrapperMain);
+            auto entryBlock = llvm::BasicBlock::Create(llvmContext, "entry", mainFunc);
             builder.SetInsertPoint(entryBlock);
             
             if (returnType->isVoidTy()) {
-                builder.CreateCall(userMainFunc, {});
+                builder.CreateCall(entryFunc, {});
                 builder.CreateRet(llvm::ConstantInt::get(llvmContext, llvm::APInt(32, 0)));
             } else {
-                auto result = builder.CreateCall(userMainFunc, {});
+                auto result = builder.CreateCall(entryFunc, {});
                 auto extendedResult = builder.CreateZExt(result, llvm::Type::getInt32Ty(llvmContext));
                 builder.CreateRet(extendedResult);
             }
             
-            if (llvm::verifyFunction(*wrapperMain, &llvm::errs())) {
-                throw std::runtime_error("Wrapper main() function failed verification");
+            if (llvm::verifyFunction(*mainFunc, &llvm::errs())) {
+                std::cerr << "Main wrapper function failed verification. Generated IR:" << std::endl;
+                mainFunc->print(llvm::errs());
+                throw std::runtime_error("Main wrapper function failed verification");
             }
             
-            return wrapperMain;
+            return mainFunc;
         } else {
-            std::cout << "DEBUG: main() returns int32, using as-is" << std::endl;
-            return userMainFunc;
+            entryFunc->setName("main");
+            std::cout << "DEBUG: Using entry point function as main directly" << std::endl;
+            return entryFunc;
         }
-    } else {
-        std::cout << "DEBUG: No user-defined main() found, generating auto-main" << std::endl;
+    }
+    else {
+        std::cout << "DEBUG: No entry point found, checking for main() function" << std::endl;
+        llvm::Function* userMainFunc = module.getFunction("main");
+        bool hasUserMain = (userMainFunc != nullptr);
         
-        auto mainFuncType = llvm::FunctionType::get(
-            llvm::Type::getInt32Ty(llvmContext), 
-            false
-        );
-        auto mainFunc = llvm::Function::Create(
-            mainFuncType,
-            llvm::Function::ExternalLinkage,
-            "main",
-            &module
-        );
-        
-        auto entryBlock = llvm::BasicBlock::Create(llvmContext, "entry", mainFunc);
-        builder.SetInsertPoint(entryBlock);
-
-        for (size_t i = 0; i < program.getStatements().size(); i++) {
-            auto& stmt = program.getStatements()[i];
-
-            if (dynamic_cast<FunctionStmt*>(stmt.get())) {
-                continue;
+        if (hasUserMain) {
+            std::cout << "DEBUG: Found user-defined main() function" << std::endl;
+            
+            auto returnType = userMainFunc->getReturnType();
+            bool isValidReturnType = returnType->isIntegerTy(32) || 
+                                     returnType->isVoidTy() || 
+                                     returnType->isIntegerTy(1);
+            
+            if (!isValidReturnType) {
+                throw std::runtime_error(
+                    "main() function must return int32, void, or uint0"
+                );
             }
             
-            if (builder.GetInsertBlock()->getTerminator()) {
-                break;
+            if (userMainFunc->arg_size() != 0) {
+                throw std::runtime_error(
+                    "main() function should not take any parameters (got " + 
+                    std::to_string(userMainFunc->arg_size()) + " parameters)"
+                );
             }
             
-            stmt->codegen(context);
+            if (returnType->isVoidTy() || returnType->isIntegerTy(1)) {
+                if (returnType->isVoidTy()) {
+                    std::cout << "DEBUG: main() returns void, creating wrapper" << std::endl;
+                } else {
+                    std::cout << "DEBUG: main() returns uint0, creating wrapper" << std::endl;
+                }
+                
+                userMainFunc->setName("__user_main");
+
+                auto mainFuncType = llvm::FunctionType::get(
+                    llvm::Type::getInt32Ty(llvmContext), 
+                    false
+                );
+                auto wrapperMain = llvm::Function::Create(
+                    mainFuncType,
+                    llvm::Function::ExternalLinkage,
+                    "main",
+                    &module
+                );
+                
+                auto entryBlock = llvm::BasicBlock::Create(llvmContext, "entry", wrapperMain);
+                builder.SetInsertPoint(entryBlock);
+                
+                if (returnType->isVoidTy()) {
+                    builder.CreateCall(userMainFunc, {});
+                    builder.CreateRet(llvm::ConstantInt::get(llvmContext, llvm::APInt(32, 0)));
+                } else {
+                    auto result = builder.CreateCall(userMainFunc, {});
+                    auto extendedResult = builder.CreateZExt(result, llvm::Type::getInt32Ty(llvmContext));
+                    builder.CreateRet(extendedResult);
+                }
+                
+                if (llvm::verifyFunction(*wrapperMain, &llvm::errs())) {
+                    std::cerr << "Wrapper main() function failed verification. Generated IR:" << std::endl;
+                    wrapperMain->print(llvm::errs());
+                    throw std::runtime_error("Wrapper main() function failed verification");
+                }
+                
+                return wrapperMain;
+            } else {
+                std::cout << "DEBUG: main() returns int32, using as-is" << std::endl;
+                return userMainFunc;
+            }
+        } else {
+            std::cout << "DEBUG: No user-defined main() found, generating auto-main" << std::endl;
+            
+            auto mainFuncType = llvm::FunctionType::get(
+                llvm::Type::getInt32Ty(llvmContext), 
+                false
+            );
+            auto autoMain = llvm::Function::Create(
+                mainFuncType,
+                llvm::Function::ExternalLinkage,
+                "main",
+                &module
+            );
+            
+            auto entryBlock = llvm::BasicBlock::Create(llvmContext, "entry", autoMain);
+            builder.SetInsertPoint(entryBlock);
+
+            for (size_t i = 0; i < program.getStatements().size(); i++) {
+                auto& stmt = program.getStatements()[i];
+
+                if (dynamic_cast<FunctionStmt*>(stmt.get())) {
+                    continue;
+                }
+                
+                if (dynamic_cast<EntrypointStmt*>(stmt.get())) {
+                    continue;
+                }
+                
+                if (builder.GetInsertBlock()->getTerminator()) {
+                    break;
+                }
+                
+                stmt->codegen(context);
+            }
+            
+            if (!builder.GetInsertBlock()->getTerminator()) {
+                builder.CreateRet(llvm::ConstantInt::get(llvmContext, llvm::APInt(32, 0)));
+            }
+            
+            if (llvm::verifyFunction(*autoMain, &llvm::errs())) {
+                std::cerr << "Auto-generated main() failed verification. Generated IR:" << std::endl;
+                autoMain->print(llvm::errs());
+                throw std::runtime_error("Auto-generated main() failed verification");
+            }
+            
+            return autoMain;
         }
-        
-        if (!builder.GetInsertBlock()->getTerminator()) {
-            builder.CreateRet(llvm::ConstantInt::get(llvmContext, llvm::APInt(32, 0)));
-        }
-        
-        if (llvm::verifyFunction(*mainFunc, &llvm::errs())) {
-            std::cerr << "Auto-generated main() failed verification. Generated IR:" << std::endl;
-            mainFunc->print(llvm::errs());
-            throw std::runtime_error("Auto-generated main() failed verification");
-        }
-        
-        return mainFunc;
     }
 }
-
 llvm::Value* StatementCodeGen::codegenFunctionStmt(CodeGen& context, FunctionStmt& stmt) {
     auto& module = context.getModule();
     auto& llvmContext = context.getContext();
@@ -369,7 +446,13 @@ llvm::Value* StatementCodeGen::codegenFunctionStmt(CodeGen& context, FunctionStm
     }
     
     auto funcType = FunctionType::get(returnType, paramTypes, false);
-    auto function = Function::Create(funcType, Function::ExternalLinkage, stmt.getName(), &module);
+    
+    std::string functionName = stmt.getName();
+    if (stmt.getIsEntryPoint()) {
+        functionName = "main";
+    }
+    
+    auto function = Function::Create(funcType, Function::ExternalLinkage, functionName, &module);
     
     if (stmt.getBody()) {
         BasicBlock* savedInsertBlock = builder.GetInsertBlock();

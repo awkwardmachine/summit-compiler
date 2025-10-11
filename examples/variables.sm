@@ -1,4 +1,4 @@
-func main() -> uint0
+@entrypoint;
+func start() -> int32
     @println("Hello, world!");
-    ret 0;
 end

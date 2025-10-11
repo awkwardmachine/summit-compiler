@@ -3,6 +3,18 @@
 using namespace std;
 using namespace AST;
 
+unique_ptr<Stmt> Parser::parseEntrypointStatement() {
+    advance();
+    
+    const Token& lastToken = tokens[current - 1];
+    if (!match(TokenType::SEMICOLON)) {
+        errorAt(lastToken, "Expected ';' after @entrypoint");
+    }
+    
+    return make_unique<EntrypointStmt>();
+}
+
+
 unique_ptr<Stmt> Parser::parseVariableDeclaration() {
     bool isConst = match(TokenType::CONST);
     if (!isConst && !match(TokenType::VAR)) error("Expected 'var' or 'const'");
@@ -161,6 +173,12 @@ unique_ptr<Stmt> Parser::parseElseIfChain() {
     return make_unique<IfStmt>(move(condition), move(thenBlock), move(elseBranch));
 }
 unique_ptr<Stmt> Parser::parseFunctionDeclaration() {
+    bool isEntryPoint = false;
+    if (check(TokenType::ENTRYPOINT)) {
+        isEntryPoint = true;
+        advance();
+    }
+    
     if (!match(TokenType::FUNC)) error("Expected 'func'");
     if (!match(TokenType::IDENTIFIER)) error("Expected function name");
     string name = tokens[current - 1].value;
@@ -186,6 +204,7 @@ unique_ptr<Stmt> Parser::parseFunctionDeclaration() {
         returnType = parseType();
     }
     
+    // Parse function body statements until 'end'
     auto body = make_unique<BlockStmt>();
     while (!check(TokenType::END) && !isAtEnd()) {
         body->addStatement(parseStatement());
@@ -195,7 +214,7 @@ unique_ptr<Stmt> Parser::parseFunctionDeclaration() {
         error("Expected 'end' after function body");
     }
     
-    return make_unique<FunctionStmt>(name, move(parameters), returnType, move(body));
+    return make_unique<FunctionStmt>(name, move(parameters), returnType, move(body), isEntryPoint);
 }
 
 unique_ptr<Stmt> Parser::parseReturnStatement() {
@@ -215,6 +234,11 @@ unique_ptr<Stmt> Parser::parseReturnStatement() {
 }
 
 unique_ptr<Stmt> Parser::parseStatement() {
+    // Check for @entrypoint; statement first
+    if (check(TokenType::ENTRYPOINT)) {
+        return parseEntrypointStatement();
+    }
+    
     if (check(TokenType::FUNC)) {
         return parseFunctionDeclaration();
     }

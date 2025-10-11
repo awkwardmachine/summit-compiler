@@ -309,19 +309,20 @@ public:
         return oss.str();
     }
 };
-
 class FunctionStmt : public Stmt {
     std::string name;
     std::vector<std::pair<std::string, VarType>> parameters;
     VarType returnType;
     std::unique_ptr<BlockStmt> body;
+    bool isEntryPoint;
 public:
     FunctionStmt(const std::string& name, 
                  std::vector<std::pair<std::string, VarType>> parameters,
                  VarType returnType,
-                 std::unique_ptr<BlockStmt> body)
+                 std::unique_ptr<BlockStmt> body,
+                 bool isEntryPoint = false)R
         : name(name), parameters(std::move(parameters)), 
-          returnType(returnType), body(std::move(body)) {}
+          returnType(returnType), body(std::move(body)), isEntryPoint(isEntryPoint) {}
     
     llvm::Value* codegen(::CodeGen& context) override;
     
@@ -329,11 +330,14 @@ public:
     const std::vector<std::pair<std::string, VarType>>& getParameters() const { return parameters; }
     VarType getReturnType() const { return returnType; }
     const std::unique_ptr<BlockStmt>& getBody() const { return body; }
+    bool getIsEntryPoint() const { return isEntryPoint; }
+    void setIsEntryPoint(bool value) { isEntryPoint = value; }
     
     std::string toString(int indent = 0) const override {
         std::ostringstream oss;
         oss << indentStr(indent) << "FunctionStmt: " << quoted(name) 
-            << " -> " << static_cast<int>(returnType) << "\n";
+            << " -> " << static_cast<int>(returnType) 
+            << (isEntryPoint ? " [ENTRYPOINT]" : "") << "\n";
         oss << indentStr(indent + 1) << "Parameters (" << parameters.size() << "):\n";
         for (const auto& param : parameters) {
             oss << indentStr(indent + 2) << quoted(param.first) 
@@ -342,6 +346,19 @@ public:
         oss << indentStr(indent + 1) << "Body:\n";
         oss << (body ? body->toString(indent + 2) : indentStr(indent + 2) + "null");
         return oss.str();
+    }
+};
+
+class EntrypointStmt : public Stmt {
+public:
+    EntrypointStmt() = default;
+    
+    llvm::Value* codegen(::CodeGen& context) override {
+        return nullptr;
+    }
+    
+    std::string toString(int indent = 0) const override {
+        return indentStr(indent) + "EntrypointStmt";
     }
 };
 
@@ -394,18 +411,45 @@ public:
         return oss.str();
     }
 };
-
 class Program {
     std::vector<std::unique_ptr<Stmt>> statements;
+    std::string entryPointFunction;
+    bool hasEntryPoint = false;
+
 public:
     void addStatement(std::unique_ptr<Stmt> stmt) {
         statements.push_back(std::move(stmt));
     }
+    
+    void setEntryPointFunction(const std::string& name) {
+        if (hasEntryPoint) {
+            throw std::runtime_error("Only one @entrypoint allowed per program");
+        }
+        entryPointFunction = name;
+        hasEntryPoint = true;
+    }
+    
+    const std::string& getEntryPointFunction() const { 
+        return entryPointFunction; 
+    }
+    
+    bool getHasEntryPoint() const {
+        return hasEntryPoint;
+    }
+    
     llvm::Value* codegen(::CodeGen& context);
-    const std::vector<std::unique_ptr<Stmt>>& getStatements() const { return statements; }
+    
+    const std::vector<std::unique_ptr<Stmt>>& getStatements() const { 
+        return statements; 
+    }
+    
     std::string toString(int indent = 0) const {
         std::ostringstream oss;
-        oss << indentStr(indent) << "Program (" << statements.size() << " stmt(s))\n";
+        oss << indentStr(indent) << "Program (" << statements.size() << " stmt(s))";
+        if (hasEntryPoint) {
+            oss << " [EntryPoint: " << entryPointFunction << "]";
+        }
+        oss << "\n";
         for (const auto& stmt : statements)
             oss << stmt->toString(indent + 1) << "\n";
         return oss.str();

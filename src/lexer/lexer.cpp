@@ -209,6 +209,12 @@ Token Lexer::readBuiltin() {
     }
 
     while (isalnum(peek()) || peek() == '_') builtin += advance();
+    
+    // Check if this is the special @entrypoint token
+    if (builtin == "entrypoint") {
+        return Token(TokenType::ENTRYPOINT, "@entrypoint", startLine, startCol);
+    }
+    
     return Token(TokenType::BUILTIN, "@" + builtin, startLine, startCol);
 }
 
