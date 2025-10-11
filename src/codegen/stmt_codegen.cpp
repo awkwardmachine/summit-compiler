@@ -26,8 +26,119 @@ llvm::Constant* createDefaultValue(llvm::Type* type, VarType varType) {
     }
     return nullptr;
 }
+llvm::Value* StatementCodeGen::codegenGlobalVariable(CodeGen& context, VariableDecl& decl) {
+    if (decl.getType() == VarType::VOID) {
+        throw std::runtime_error("Cannot declare global variable of type 'void'");
+    }
+
+    auto& module = context.getModule();
+    auto& llvmContext = context.getContext();
+    
+    auto varType = context.getLLVMType(decl.getType());
+    if (!varType) {
+        throw std::runtime_error("Unknown variable type for global: " + decl.getName());
+    }
+    
+    llvm::Constant* initialValue = nullptr;
+    
+    if (decl.getValue()) {
+        if (auto numberExpr = dynamic_cast<NumberExpr*>(decl.getValue().get())) {
+            const BigInt& bigValue = numberExpr->getValue();
+            if (!TypeBounds::checkBounds(decl.getType(), bigValue)) {
+                throw std::runtime_error(
+                    "Value " + bigValue.toString() + " out of bounds for type " + 
+                    TypeBounds::getTypeName(decl.getType()) + ". " +
+                    "Valid range: " + TypeBounds::getTypeRange(decl.getType())
+                );
+            }
+            
+            if (TypeBounds::isUnsignedType(decl.getType())) {
+                try {
+                    int64_t signedValue = bigValue.toInt64();
+                    if (signedValue < 0) {
+                        throw std::runtime_error("Negative value for unsigned type");
+                    }
+                    initialValue = ConstantInt::get(varType, signedValue, false);
+                } catch (const std::exception& e) {
+                    throw std::runtime_error("Value " + bigValue.toString() + 
+                                           " cannot be represented as unsigned " + 
+                                           TypeBounds::getTypeName(decl.getType()));
+                }
+            } else {
+                initialValue = ConstantInt::get(varType, bigValue.toInt64(), true);
+            }
+        }
+        else if (auto stringExpr = dynamic_cast<StringExpr*>(decl.getValue().get())) {
+            if (decl.getType() != VarType::STRING) {
+                throw std::runtime_error("String literal can only initialize string variables");
+            }
+            initialValue = llvm::ConstantDataArray::getString(llvmContext, stringExpr->getValue());
+            varType = initialValue->getType();
+        }
+        else if (auto floatExpr = dynamic_cast<FloatExpr*>(decl.getValue().get())) {
+            if (decl.getType() == VarType::FLOAT32) {
+                initialValue = ConstantFP::get(Type::getFloatTy(llvmContext), (float)floatExpr->getValue());
+            } else if (decl.getType() == VarType::FLOAT64) {
+                initialValue = ConstantFP::get(Type::getDoubleTy(llvmContext), floatExpr->getValue());
+            } else {
+                throw std::runtime_error("Float literal can only initialize float variables");
+            }
+        }
+        else if (auto boolExpr = dynamic_cast<BooleanExpr*>(decl.getValue().get())) {
+            if (decl.getType() != VarType::UINT0) {
+                throw std::runtime_error("Boolean literal can only initialize uint0 variables");
+            }
+            initialValue = ConstantInt::get(Type::getInt1Ty(llvmContext), boolExpr->getValue() ? 1 : 0);
+        }
+        else {
+            throw std::runtime_error("Global variables can only be initialized with constant expressions");
+        }
+    } else {
+        if (decl.getType() == VarType::FLOAT32) {
+            initialValue = ConstantFP::get(Type::getFloatTy(llvmContext), 0.0);
+        }
+        else if (decl.getType() == VarType::FLOAT64) {
+            initialValue = ConstantFP::get(Type::getDoubleTy(llvmContext), 0.0);
+        }
+        else if (decl.getType() == VarType::UINT0) {
+            initialValue = ConstantInt::get(Type::getInt1Ty(llvmContext), 0);
+        }
+        else if (decl.getType() == VarType::STRING) {
+            initialValue = llvm::ConstantDataArray::getString(llvmContext, "");
+            varType = initialValue->getType();
+        }
+        else {
+            initialValue = ConstantInt::get(varType, 0);
+        }
+    }
+    
+    auto globalVar = new llvm::GlobalVariable(
+        module,
+        varType,
+        decl.getIsConst(),
+        llvm::GlobalValue::ExternalLinkage,
+        initialValue,
+        decl.getName()
+    );
+    
+    context.getNamedValues()[decl.getName()] = globalVar;
+    context.getVariableTypes()[decl.getName()] = decl.getType();
+    
+    if (decl.getIsConst()) {
+        context.getConstVariables().insert(decl.getName());
+    }
+    
+    return globalVar;
+}
 
 llvm::Value* StatementCodeGen::codegenVariableDecl(CodeGen& context, VariableDecl& decl) {
+    auto& builder = context.getBuilder();
+    auto currentFunction = builder.GetInsertBlock() ? builder.GetInsertBlock()->getParent() : nullptr;
+    
+    if (!currentFunction) {
+        return codegenGlobalVariable(context, decl);
+    }
+    
     if (decl.getType() == VarType::VOID) {
         throw std::runtime_error("Cannot declare variable of type 'void'");
     }
@@ -35,13 +146,6 @@ llvm::Value* StatementCodeGen::codegenVariableDecl(CodeGen& context, VariableDec
     auto varType = context.getLLVMType(decl.getType());
     if (!varType) {
         throw std::runtime_error("Unknown variable type");
-    }
-    
-    auto& builder = context.getBuilder();
-    
-    auto currentFunction = builder.GetInsertBlock()->getParent();
-    if (!currentFunction) {
-        throw std::runtime_error("No current function");
     }
     
     IRBuilder<> entryBuilder(&currentFunction->getEntryBlock(), 
@@ -167,6 +271,7 @@ llvm::Value* StatementCodeGen::codegenVariableDecl(CodeGen& context, VariableDec
 
     return alloca;
 }
+
 llvm::Value* StatementCodeGen::codegenAssignment(CodeGen& context, AssignmentStmt& stmt) {
     auto var = context.lookupVariable(stmt.getName());
     if (!var) {
@@ -230,8 +335,16 @@ llvm::Value* StatementCodeGen::codegenProgram(CodeGen& context, Program& program
     auto& module = context.getModule();
     auto& llvmContext = context.getContext();
     
-    std::cout << "DEBUG: First pass - generating all functions" << std::endl;
+    std::cout << "DEBUG: First pass - generating global variables and functions" << std::endl;
     
+    for (size_t i = 0; i < program.getStatements().size(); i++) {
+        auto& stmt = program.getStatements()[i];
+        if (auto* varDecl = dynamic_cast<VariableDecl*>(stmt.get())) {
+            std::cout << "DEBUG: Generating global variable: " << varDecl->getName() << std::endl;
+            codegenGlobalVariable(context, *varDecl);
+        }
+    }
+
     for (size_t i = 0; i < program.getStatements().size(); i++) {
         auto& stmt = program.getStatements()[i];
         if (auto* funcStmt = dynamic_cast<FunctionStmt*>(stmt.get())) {
@@ -402,6 +515,10 @@ llvm::Value* StatementCodeGen::codegenProgram(CodeGen& context, Program& program
                 }
                 
                 if (dynamic_cast<EntrypointStmt*>(stmt.get())) {
+                    continue;
+                }
+                
+                if (dynamic_cast<VariableDecl*>(stmt.get())) {
                     continue;
                 }
                 

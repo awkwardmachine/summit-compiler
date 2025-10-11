@@ -4,6 +4,8 @@
 #include <stdexcept>
 #include <climits>
 #include <iostream>
+#include <cstdint>  // Add this for uint64_t
+#include <limits>   // Add this for std::numeric_limits
 
 class BigInt {
     mp_int value;
@@ -134,6 +136,8 @@ public:
     bool operator!=(const BigInt& other) const {
         return mp_cmp(&value, const_cast<mp_int*>(&other.value)) != MP_EQ;
     }
+
+    // REMOVED the problematic toUint64() method
     
     static const BigInt MIN_INT4;
     static const BigInt MAX_INT4;
