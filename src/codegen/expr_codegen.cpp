@@ -5,7 +5,7 @@
 #include "codegen/bounds.h"
 #include <llvm/IR/Verifier.h>
 #include <iostream>
-#include "stdlib.h"
+#include "summit_stdlib.h"
 #include <regex>
 #include <vector>
 #include <sstream>

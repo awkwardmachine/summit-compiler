@@ -1,4 +1,4 @@
-#include "stdlib.h"
+#include "summit_stdlib.h"
 #include <llvm/IR/Function.h>
 #include <llvm/IR/Type.h>
 #include <llvm/IR/IRBuilder.h>

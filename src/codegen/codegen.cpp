@@ -5,6 +5,14 @@
 #include <llvm/IR/Verifier.h>
 #include "codegen/bounds.h"
 #include "ast/ast.h"
+#include <llvm/Support/TargetSelect.h>
+#include <llvm/Target/TargetMachine.h>
+#include <llvm/Target/TargetOptions.h>
+#include <llvm/MC/TargetRegistry.h>
+#include <llvm/Support/FileSystem.h>
+#include <llvm/IR/LegacyPassManager.h>
+#include <system_error>
+#include <cstdlib>
 
 /* Using LLVM and AST namespaces */
 using namespace llvm;
@@ -209,4 +217,95 @@ void CodeGen::printIRToFile(const std::string& filename) {
     llvm::raw_fd_ostream out(filename, EC);
     if (EC) throw std::runtime_error("Could not open file: " + filename);
     llvmModule->print(out, nullptr);
+}
+
+bool CodeGen::compileToExecutable(const std::string& outputFilename, bool verbose, const std::string& targetTriple) {
+    llvm::InitializeAllTargetInfos();
+    llvm::InitializeAllTargets();
+    llvm::InitializeAllTargetMCs();
+    llvm::InitializeAllAsmParsers();
+    llvm::InitializeAllAsmPrinters();
+
+    std::string triple = targetTriple;
+    if (triple.empty()) {
+#if defined(_WIN32)
+        triple = "x86_64-w64-windows-gnu";
+#elif defined(__APPLE__)
+        triple = "x86_64-apple-darwin";
+#else
+        triple = "x86_64-pc-linux-gnu";
+#endif
+    }
+    
+    llvmModule->setTargetTriple(triple);
+
+    if (verbose) {
+        std::cerr << "Target triple: " << triple << std::endl;
+    }
+
+    std::string error;
+    auto target = llvm::TargetRegistry::lookupTarget(triple, error);
+    if (!target) {
+        std::cerr << "Error: " << error << std::endl;
+        return false;
+    }
+
+    auto cpu = "generic";
+    auto features = "";
+    llvm::TargetOptions opt;
+    auto targetMachine = target->createTargetMachine(
+        triple, cpu, features, opt, llvm::Reloc::PIC_);
+
+    llvmModule->setDataLayout(targetMachine->createDataLayout());
+
+    std::string objFilename = outputFilename + ".o";
+    std::error_code EC;
+    llvm::raw_fd_ostream dest(objFilename, EC, llvm::sys::fs::OF_None);
+
+    if (EC) {
+        std::cerr << "Could not open file: " << EC.message() << std::endl;
+        return false;
+    }
+
+    llvm::legacy::PassManager pass;
+    auto fileType = llvm::CodeGenFileType::ObjectFile;
+
+    if (targetMachine->addPassesToEmitFile(pass, dest, nullptr, fileType)) {
+        std::cerr << "TargetMachine can't emit a file of this type" << std::endl;
+        return false;
+    }
+
+    pass.run(*llvmModule);
+    dest.flush();
+
+    if (verbose) {
+        std::cerr << "Generated object file: " << objFilename << std::endl;
+    }
+
+    std::string linkCmd;
+    bool isWindows = (triple.find("windows") != std::string::npos || 
+                     triple.find("mingw") != std::string::npos ||
+                     triple.find("win32") != std::string::npos);
+    
+    if (isWindows) {
+        std::string exeName = outputFilename;
+        if (exeName.length() < 4 || exeName.substr(exeName.length() - 4) != ".exe") {
+            exeName += ".exe";
+        }
+        linkCmd = "clang++ -target " + triple + " -o " + exeName + " " + objFilename;
+        if (verbose) linkCmd += " -v";
+    } else {
+        linkCmd = "clang++ -target " + triple + " -o " + outputFilename + " " + objFilename;
+        if (verbose) linkCmd += " -v";
+    }
+
+    if (verbose) {
+        std::cerr << "Linking: " << linkCmd << std::endl;
+    }
+
+    int result = std::system(linkCmd.c_str());
+    
+    std::remove(objFilename.c_str());
+
+    return result == 0;
 }

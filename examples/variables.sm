@@ -1,6 +1,14 @@
 const std = @import("std");
+const io = std.io;
+
+func count(to: int8)
+    for (i: int8 = 1; i <= to; i++) do
+        io.println(i);
+    end
+end
 
 func main() -> uint0
-    std.io.println("Hello, world!");
+    count(30);
+    io.println("Loop finished!");
     ret 0;
 end

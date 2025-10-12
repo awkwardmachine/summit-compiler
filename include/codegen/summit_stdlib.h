@@ -37,4 +37,4 @@ private:
                                                 const std::vector<llvm::Type*>& paramTypes);
 };
 
-#endif // STANDARD_LIBRARY_H
+#endif

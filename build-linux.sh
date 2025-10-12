@@ -1,21 +1,18 @@
-#!/usr/bin/env bash
 set -euo pipefail
 
 c=clang++
 s=src
-b=build
+b=build-linux
 bin="$b/bin"
 t="$bin/summit"
 n=$(nproc)
 
-# Compilation flags
 cf="-std=c++17 -O2 \
 -fdata-sections -ffunction-sections -DNDEBUG \
 -Isrc -Iinclude -Iinclude/codegen -Iinclude/ast -Iinclude/utils -Iinclude/lexer -Iinclude/parser \
 -I/usr/include/llvm-18 -I/usr/include/llvm \
 -fmerge-all-constants -fno-stack-protector -fno-math-errno -fno-ident -w"
 
-# Linker flags
 lf="-L/usr/lib/llvm-18/lib -lLLVM-18 -ltommath \
 -Wl,--gc-sections,--as-needed,--strip-all,-s -flto -Wl,-O3"
 
@@ -24,13 +21,11 @@ run(){ echo "+ $*"; "$@"; }
 build(){
     run mkdir -p "$b" "$bin"
 
-    # compile in parallel and show each file
     srcs=$(find "$s" -name '*.cpp')
     
     echo "Starting compilation..."
     start_time=$(date +%s)
 
-    # faster parallel compilation using xargs directly
     echo "$srcs" | xargs -n 1 -P $n -I {} bash -c '
         o="'"$b"'/${1#'"$s"'/}"; o="${o%.cpp}.o"
         mkdir -p "$(dirname "$o")"
@@ -41,7 +36,6 @@ build(){
     objs=$(find "$b" -name '*.o')
     run $c $objs $lf -o "$t"
 
-    # strip and compress
     if command -v sstrip >/dev/null 2>&1; then
         run sstrip "$t" || true
     else

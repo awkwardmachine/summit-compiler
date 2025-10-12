@@ -110,6 +110,7 @@ public:
     /* Debugging and output methods */
     void printIR();
     void printIRToFile(const std::string& filename);
+    bool compileToExecutable(const std::string& outputFilename, bool verbose = false, const std::string& targetTriple = "");
 
     void setModuleReference(const std::string& varName, llvm::Value* module, const std::string& actualModuleName) {
         moduleReferences[varName] = module;
