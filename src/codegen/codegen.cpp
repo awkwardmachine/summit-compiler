@@ -190,6 +190,14 @@ llvm::Value* CodeGen::codegen(AST::MemberAccessExpr& expr) {
     return ExpressionCodeGen::codegenMemberAccess(*this, expr);
 }
 
+llvm::Value* CodeGen::codegen(AST::EnumValueExpr& expr) {
+    return ExpressionCodeGen::codegenEnumValue(*this, expr);
+}
+
+llvm::Value* CodeGen::codegen(AST::EnumDecl& expr) {
+    return StatementCodeGen::codegenEnumDecl(*this, expr);
+}
+
 /* Print LLVM IR to stdout */
 void CodeGen::printIR() {
     llvmModule->print(outs(), nullptr);

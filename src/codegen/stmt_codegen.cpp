@@ -5,6 +5,7 @@
 #include <llvm/IR/BasicBlock.h>
 #include "codegen/bounds.h"
 #include "type_inference.h"
+#include "expr_codegen.h"
 
 using namespace llvm;
 using namespace AST;
@@ -26,6 +27,323 @@ llvm::Constant* createDefaultValue(llvm::Type* type, VarType varType) {
     }
     return nullptr;
 }
+llvm::Value* StatementCodeGen::codegenVariableDecl(CodeGen& context, VariableDecl& decl) {
+    auto& builder = context.getBuilder();
+    auto& module = context.getModule();
+    auto& llvmContext = context.getContext();
+    
+    std::string name = decl.getName();
+    VarType type = decl.getType();
+    bool isConst = decl.getIsConst();
+    auto& valueExpr = decl.getValue();
+    
+    bool isGlobal = !builder.GetInsertBlock();
+    
+    if (isGlobal) {
+        llvm::Type* llvmType = context.getLLVMType(type);
+        if (!llvmType) {
+            throw std::runtime_error("Unknown type for global variable: " + name);
+        }
+        
+        if (valueExpr) {
+            if (auto* moduleExpr = dynamic_cast<ModuleExpr*>(valueExpr.get())) {
+                auto moduleValue = ExpressionCodeGen::codegenModule(context, *moduleExpr);
+                if (moduleValue) {
+                    auto globalVar = new llvm::GlobalVariable(
+                        module,
+                        moduleValue->getType(),
+                        isConst,
+                        llvm::GlobalValue::InternalLinkage,
+                        llvm::cast<llvm::Constant>(moduleValue),
+                        name
+                    );
+                    context.getNamedValues()[name] = globalVar;
+                    context.getVariableTypes()[name] = VarType::MODULE;
+                    context.setModuleReference(name, globalVar, moduleExpr->getModuleName());
+                    return globalVar;
+                }
+            }
+            else if (auto* memberAccess = dynamic_cast<MemberAccessExpr*>(valueExpr.get())) {
+                auto object = memberAccess->getObject().get();
+                auto member = memberAccess->getMember();
+                
+                if (auto* varExpr = dynamic_cast<VariableExpr*>(object)) {
+                    auto baseVar = context.lookupVariable(varExpr->getName());
+                    if (baseVar) {
+                        auto baseType = context.lookupVariableType(varExpr->getName());
+                        if (baseType == VarType::MODULE) {
+                            std::string moduleName = context.getModuleIdentity(varExpr->getName());
+                            if (!moduleName.empty()) {
+                                auto placeholderType = llvm::StructType::create(llvmContext, "module_member");
+                                auto globalVar = new llvm::GlobalVariable(
+                                    module,
+                                    placeholderType,
+                                    isConst,
+                                    llvm::GlobalValue::InternalLinkage,
+                                    llvm::ConstantAggregateZero::get(placeholderType),
+                                    name
+                                );
+                                context.getNamedValues()[name] = globalVar;
+                                context.getVariableTypes()[name] = VarType::MODULE;
+                                context.setModuleReference(name, globalVar, moduleName + "." + member);
+                                return globalVar;
+                            }
+                        }
+                    }
+                }
+                auto value = valueExpr->codegen(context);
+                if (llvm::isa<llvm::Constant>(value)) {
+                    auto globalVar = new llvm::GlobalVariable(
+                        module,
+                        value->getType(),
+                        isConst,
+                        llvm::GlobalValue::InternalLinkage,
+                        llvm::cast<llvm::Constant>(value),
+                        name
+                    );
+                    context.getNamedValues()[name] = globalVar;
+                    context.getVariableTypes()[name] = type;
+                    return globalVar;
+                } else {
+                    throw std::runtime_error("Global variables can only be initialized with constant expressions");
+                }
+            }
+            else if (auto* enumValue = dynamic_cast<EnumValueExpr*>(valueExpr.get())) {
+                auto enumVal = ExpressionCodeGen::codegenEnumValue(context, *enumValue);
+                if (llvm::isa<llvm::Constant>(enumVal)) {
+                    auto globalVar = new llvm::GlobalVariable(
+                        module,
+                        enumVal->getType(),
+                        isConst,
+                        llvm::GlobalValue::InternalLinkage,
+                        llvm::cast<llvm::Constant>(enumVal),
+                        name
+                    );
+                    context.getNamedValues()[name] = globalVar;
+                    context.getVariableTypes()[name] = type;
+                    return globalVar;
+                } else {
+                    throw std::runtime_error("Enum value is not constant");
+                }
+            }
+            else if (auto* numberExpr = dynamic_cast<NumberExpr*>(valueExpr.get())) {
+                auto value = ExpressionCodeGen::codegenNumber(context, *numberExpr);
+                if (llvm::isa<llvm::Constant>(value)) {
+                    auto globalVar = new llvm::GlobalVariable(
+                        module,
+                        value->getType(),
+                        isConst,
+                        llvm::GlobalValue::InternalLinkage,
+                        llvm::cast<llvm::Constant>(value),
+                        name
+                    );
+                    context.getNamedValues()[name] = globalVar;
+                    context.getVariableTypes()[name] = type;
+                    return globalVar;
+                }
+            }
+            else if (auto* floatExpr = dynamic_cast<FloatExpr*>(valueExpr.get())) {
+                auto value = ExpressionCodeGen::codegenFloat(context, *floatExpr);
+                if (llvm::isa<llvm::Constant>(value)) {
+                    auto globalVar = new llvm::GlobalVariable(
+                        module,
+                        value->getType(),
+                        isConst,
+                        llvm::GlobalValue::InternalLinkage,
+                        llvm::cast<llvm::Constant>(value),
+                        name
+                    );
+                    context.getNamedValues()[name] = globalVar;
+                    context.getVariableTypes()[name] = type;
+                    return globalVar;
+                }
+            }
+            else if (auto* stringExpr = dynamic_cast<StringExpr*>(valueExpr.get())) {
+                auto value = ExpressionCodeGen::codegenString(context, *stringExpr);
+                if (llvm::isa<llvm::Constant>(value)) {
+                    auto globalVar = new llvm::GlobalVariable(
+                        module,
+                        value->getType(),
+                        isConst,
+                        llvm::GlobalValue::InternalLinkage,
+                        llvm::cast<llvm::Constant>(value),
+                        name
+                    );
+                    context.getNamedValues()[name] = globalVar;
+                    context.getVariableTypes()[name] = type;
+                    return globalVar;
+                }
+            }
+            else if (auto* boolExpr = dynamic_cast<BooleanExpr*>(valueExpr.get())) {
+                auto value = ExpressionCodeGen::codegenBoolean(context, *boolExpr);
+                if (llvm::isa<llvm::Constant>(value)) {
+                    auto globalVar = new llvm::GlobalVariable(
+                        module,
+                        value->getType(),
+                        isConst,
+                        llvm::GlobalValue::InternalLinkage,
+                        llvm::cast<llvm::Constant>(value),
+                        name
+                    );
+                    context.getNamedValues()[name] = globalVar;
+                    context.getVariableTypes()[name] = type;
+                    return globalVar;
+                }
+            }
+            else {
+                auto value = valueExpr->codegen(context);
+                if (llvm::isa<llvm::Constant>(value)) {
+                    auto globalVar = new llvm::GlobalVariable(
+                        module,
+                        value->getType(),
+                        isConst,
+                        llvm::GlobalValue::InternalLinkage,
+                        llvm::cast<llvm::Constant>(value),
+                        name
+                    );
+                    context.getNamedValues()[name] = globalVar;
+                    context.getVariableTypes()[name] = type;
+                    return globalVar;
+                } else {
+                    throw std::runtime_error("Global variables can only be initialized with constant expressions");
+                }
+            }
+        } else {
+            auto globalVar = new llvm::GlobalVariable(
+                module,
+                llvmType,
+                isConst,
+                llvm::GlobalValue::InternalLinkage,
+                llvm::Constant::getNullValue(llvmType),
+                name
+            );
+            context.getNamedValues()[name] = globalVar;
+            context.getVariableTypes()[name] = type;
+            return globalVar;
+        }
+    } else {
+        llvm::Type* llvmType = context.getLLVMType(type);
+        if (!llvmType) {
+            throw std::runtime_error("Unknown type for variable: " + name);
+        }
+        
+        llvm::Function* currentFunction = builder.GetInsertBlock()->getParent();
+        llvm::IRBuilder<> entryBuilder(&currentFunction->getEntryBlock(), currentFunction->getEntryBlock().begin());
+        llvm::AllocaInst* alloca = entryBuilder.CreateAlloca(llvmType, nullptr, name);
+        
+        if (valueExpr) {
+            auto value = valueExpr->codegen(context);
+            
+            if (value->getType() != llvmType) {
+                if (llvmType->isIntegerTy() && value->getType()->isIntegerTy()) {
+                    unsigned targetBits = llvmType->getIntegerBitWidth();
+                    unsigned sourceBits = value->getType()->getIntegerBitWidth();
+                    
+                    if (sourceBits < targetBits) {
+                        if (TypeBounds::isUnsignedType(type)) {
+                            value = builder.CreateZExt(value, llvmType);
+                        } else {
+                            value = builder.CreateSExt(value, llvmType);
+                        }
+                    } else if (sourceBits > targetBits) {
+                        value = builder.CreateTrunc(value, llvmType);
+                    }
+                } else if (llvmType->isFPOrFPVectorTy() && value->getType()->isIntegerTy()) {
+                    if (TypeBounds::isUnsignedType(AST::inferSourceType(value, context))) {
+                        value = builder.CreateUIToFP(value, llvmType);
+                    } else {
+                        value = builder.CreateSIToFP(value, llvmType);
+                    }
+                } else if (llvmType->isIntegerTy() && value->getType()->isFPOrFPVectorTy()) {
+                    if (TypeBounds::isUnsignedType(type)) {
+                        value = builder.CreateFPToUI(value, llvmType);
+                    } else {
+                        value = builder.CreateFPToSI(value, llvmType);
+                    }
+                } else if (llvmType->isFPOrFPVectorTy() && value->getType()->isFPOrFPVectorTy()) {
+                    if (llvmType->isFloatTy() && value->getType()->isDoubleTy()) {
+                        value = builder.CreateFPTrunc(value, llvmType);
+                    } else if (llvmType->isDoubleTy() && value->getType()->isFloatTy()) {
+                        value = builder.CreateFPExt(value, llvmType);
+                    }
+                }
+            }
+            
+            builder.CreateStore(value, alloca);
+        } else {
+            builder.CreateStore(llvm::Constant::getNullValue(llvmType), alloca);
+        }
+        
+        context.getNamedValues()[name] = alloca;
+        context.getVariableTypes()[name] = type;
+        if (isConst) {
+            context.getConstVariables().insert(name);
+        }
+        
+        return alloca;
+    }
+    
+    return nullptr;
+}
+
+llvm::Value* StatementCodeGen::codegenAssignment(CodeGen& context, AssignmentStmt& stmt) {
+    auto var = context.lookupVariable(stmt.getName());
+    if (!var) {
+        throw std::runtime_error("Unknown variable: " + stmt.getName());
+    }
+
+    if (context.isVariableConst(stmt.getName())) {
+        throw std::runtime_error("Cannot assign to const variable: " + stmt.getName());
+    }
+
+    VarType varType = context.lookupVariableType(stmt.getName());
+    if (varType == VarType::VOID) {
+        throw std::runtime_error("Unknown variable type for: " + stmt.getName());
+    }
+    
+    if (varType == VarType::UINT0) {
+        throw std::runtime_error("Cannot assign to uint0 — value is always 0");
+    }
+
+    auto value = stmt.getValue()->codegen(context);
+    auto& builder = context.getBuilder();
+    
+    llvm::Type* expectedType = context.getLLVMType(varType);
+    
+    if (value->getType() != expectedType) {
+        if (expectedType->isFPOrFPVectorTy() && value->getType()->isFPOrFPVectorTy()) {
+            if (varType == VarType::FLOAT32 && value->getType()->isDoubleTy()) {
+                value = builder.CreateFPTrunc(value, expectedType);
+            } else if (varType == VarType::FLOAT64 && value->getType()->isFloatTy()) {
+                value = builder.CreateFPExt(value, expectedType);
+            }
+        }
+        else if (expectedType->isFPOrFPVectorTy() && value->getType()->isIntegerTy()) {
+            value = builder.CreateSIToFP(value, expectedType);
+        }
+        else if (expectedType->isIntegerTy() && value->getType()->isFPOrFPVectorTy()) {
+            value = builder.CreateFPToSI(value, expectedType);
+        }
+        else if (expectedType->isIntegerTy() && value->getType()->isIntegerTy()) {
+            if (value->getType()->getIntegerBitWidth() < expectedType->getIntegerBitWidth()) {
+                value = builder.CreateSExt(value, expectedType);
+            } else {
+                value = builder.CreateTrunc(value, expectedType);
+            }
+        }
+    }
+    
+    if (value->getType() != expectedType) {
+        throw std::runtime_error("Type mismatch in assignment to variable: " + stmt.getName());
+    }
+
+    builder.CreateStore(value, var);
+    return value;
+}
+
+llvm::Value* StatementCodeGen::codegenExprStmt(CodeGen& context, ExprStmt& stmt) {
+    return stmt.getExpr()->codegen(context);
+}
 llvm::Value* StatementCodeGen::codegenGlobalVariable(CodeGen& context, VariableDecl& decl) {
     if (decl.getType() == VarType::VOID) {
         throw std::runtime_error("Cannot declare global variable of type 'void'");
@@ -42,7 +360,6 @@ llvm::Value* StatementCodeGen::codegenGlobalVariable(CodeGen& context, VariableD
     llvm::Constant* initialValue = nullptr;
     
     if (decl.getValue()) {
-        // Handle module expressions (like @import)
         if (auto* moduleExpr = dynamic_cast<ModuleExpr*>(decl.getValue().get())) {
             const std::string& moduleName = moduleExpr->getModuleName();
             
@@ -80,27 +397,21 @@ llvm::Value* StatementCodeGen::codegenGlobalVariable(CodeGen& context, VariableD
                 throw std::runtime_error("Unknown module: " + moduleName);
             }
         }
-        // Handle member access expressions in global context (like lib.io)
         else if (auto* memberAccess = dynamic_cast<MemberAccessExpr*>(decl.getValue().get())) {
-            // For global variables, we can only handle module member access
             if (auto* varExpr = dynamic_cast<VariableExpr*>(memberAccess->getObject().get())) {
                 std::string moduleName = varExpr->getName();
                 std::string memberName = memberAccess->getMember();
                 
-                // Check if the base is a known module
                 auto baseVar = context.lookupVariable(moduleName);
                 if (baseVar) {
                     auto baseType = context.lookupVariableType(moduleName);
                     if (baseType == VarType::MODULE) {
-                        // Create a module reference for the member
                         std::string actualModuleName = context.getModuleIdentity(moduleName);
                         if (!actualModuleName.empty()) {
                             moduleName = actualModuleName;
                         }
                         
-                        // Handle specific module members
                         if (moduleName == "std" && memberName == "io") {
-                            // Create io module reference
                             auto ioType = context.getLLVMType(VarType::MODULE);
                             initialValue = ConstantAggregateZero::get(ioType);
                             
@@ -129,6 +440,19 @@ llvm::Value* StatementCodeGen::codegenGlobalVariable(CodeGen& context, VariableD
                 }
             }
             throw std::runtime_error("Global variables can only be initialized with constant expressions or module members");
+        }
+        else if (auto* enumValue = dynamic_cast<EnumValueExpr*>(decl.getValue().get())) {
+            std::string fullEnumName = enumValue->getEnumName() + "." + enumValue->getMemberName();
+            
+            auto enumVar = context.lookupVariable(fullEnumName);
+            if (enumVar && llvm::isa<llvm::GlobalVariable>(enumVar)) {
+                auto globalEnumVar = llvm::cast<llvm::GlobalVariable>(enumVar);
+                initialValue = globalEnumVar->getInitializer();
+                
+                std::cout << "DEBUG: Using enum value " << fullEnumName << " for global " << decl.getName() << std::endl;
+            } else {
+                throw std::runtime_error("Unknown enum value: " + fullEnumName);
+            }
         }
         else if (auto numberExpr = dynamic_cast<NumberExpr*>(decl.getValue().get())) {
             const BigInt& bigValue = numberExpr->getValue();
@@ -224,280 +548,25 @@ llvm::Value* StatementCodeGen::codegenGlobalVariable(CodeGen& context, VariableD
     }
     
     return globalVar;
-}llvm::Value* StatementCodeGen::codegenVariableDecl(CodeGen& context, VariableDecl& decl) {
-    auto& builder = context.getBuilder();
-    auto currentFunction = builder.GetInsertBlock() ? builder.GetInsertBlock()->getParent() : nullptr;
-    
-    if (!currentFunction) {
-        return codegenGlobalVariable(context, decl);
-    }
-    
-    if (decl.getType() == VarType::VOID) {
-        throw std::runtime_error("Cannot declare variable of type 'void'");
-    }
-
-    if (decl.getValue()) {
-        auto value = decl.getValue()->codegen(context);
-        if (!value) {
-            throw std::runtime_error("Failed to generate value for variable: " + decl.getName());
-        }
-        
-        bool isModule = false;
-        llvm::Value* actualModule = value;
-        std::string actualModuleName = "unknown";
-        
-        if (auto* globalVar = llvm::dyn_cast<llvm::GlobalVariable>(value)) {
-            std::string name = globalVar->getName().str();
-
-            if (name == "std" || name.find("std") == 0) {
-                isModule = true;
-                actualModule = globalVar;
-                actualModuleName = "std";
-            }
-            else if (name == "io" || name.find("io") == 0) {
-                isModule = true;
-                actualModule = globalVar;
-                actualModuleName = "io";
-            }
-            else if (globalVar->getValueType()->isStructTy()) {
-                if (auto* structType = llvm::dyn_cast<llvm::StructType>(globalVar->getValueType())) {
-                    std::string typeName = structType->getName().str();
-                    if (typeName.find("module_t") != std::string::npos) {
-                        isModule = true;
-                        actualModule = globalVar;
-                        if (name.find("std") == 0) {
-                            actualModuleName = "std";
-                        } else if (name.find("io") == 0) {
-                            actualModuleName = "io";
-                        } else {
-                            actualModuleName = name;
-                        }
-                    }
-                }
-            }
-        }
-        
-        // Also check for function pointers (like println)
-        if (auto* func = llvm::dyn_cast<llvm::Function>(value)) {
-            std::string funcName = func->getName().str();
-            if (funcName.find("io_") == 0 || funcName.find("println") != std::string::npos) {
-                // Treat function pointers as regular values, not modules
-                isModule = false;
-            }
-        }
-        
-        if (isModule) {
-            context.getNamedValues()[decl.getName()] = value;
-            context.getVariableTypes()[decl.getName()] = AST::VarType::MODULE;
-            
-            // FIX: Always use the actual module name, not the variable name
-            context.setModuleReference(decl.getName(), actualModule, actualModuleName);
-            
-            std::cout << "DEBUG: Created module alias: " << decl.getName() << " -> " << actualModuleName << std::endl;
-            
-            if (decl.getIsConst()) {
-                context.getConstVariables().insert(decl.getName());
-            }
-            
-            return value;
-        }
-    }
-
-    // ... rest of the existing function for non-module variables
-    auto varType = context.getLLVMType(decl.getType());
-    if (!varType) {
-        throw std::runtime_error("Unknown variable type");
-    }
-    
-    IRBuilder<> entryBuilder(&currentFunction->getEntryBlock(), 
-                           currentFunction->getEntryBlock().begin());
-    auto alloca = entryBuilder.CreateAlloca(varType, nullptr, decl.getName());
-
-    if (decl.getValue()) {
-        auto value = decl.getValue()->codegen(context);
-        if (!value) {
-            throw std::runtime_error("Failed to generate value for variable: " + decl.getName());
-        }
-
-        if (decl.getType() == VarType::STRING) {
-            if (!value->getType()->isPointerTy()) {
-                throw std::runtime_error("String variable must be initialized with a string literal");
-            }
-            builder.CreateStore(value, alloca);
-        }
-        else if (decl.getType() == VarType::UINT0) {
-            auto zero = ConstantInt::get(Type::getInt1Ty(context.getContext()), 0);
-            builder.CreateStore(zero, alloca);
-        }
-        else {
-            bool isFloatType = (decl.getType() == VarType::FLOAT32 || decl.getType() == VarType::FLOAT64);
-
-            if (isFloatType) {
-                if (value->getType()->isIntegerTy()) {
-                    value = builder.CreateSIToFP(value, varType);
-                } else if (value->getType()->isFPOrFPVectorTy() && value->getType() != varType) {
-                    if (decl.getType() == VarType::FLOAT32 && value->getType()->isDoubleTy()) {
-                        value = builder.CreateFPTrunc(value, varType);
-                    } else if (decl.getType() == VarType::FLOAT64 && value->getType()->isFloatTy()) {
-                        value = builder.CreateFPExt(value, varType);
-                    }
-                }
-                else if (auto floatExpr = dynamic_cast<FloatExpr*>(decl.getValue().get())) {
-                    if (decl.getType() == VarType::FLOAT32) {
-                        value = ConstantFP::get(Type::getFloatTy(context.getContext()), floatExpr->getValue());
-                    } else {
-                        value = ConstantFP::get(Type::getDoubleTy(context.getContext()), floatExpr->getValue());
-                    }
-                }
-            }
-            else if (!isFloatType && value->getType()->isFPOrFPVectorTy()) {
-                value = builder.CreateFPToSI(value, varType);
-
-                if (auto floatExpr = dynamic_cast<FloatExpr*>(decl.getValue().get())) {
-                    double floatValue = floatExpr->getValue();
-                    if (decl.getType() == VarType::INT32 && (floatValue < INT32_MIN || floatValue > INT32_MAX)) {
-                        throw std::runtime_error("Float value " + std::to_string(floatValue) + 
-                                               " out of bounds for int32");
-                    }
-                    if (decl.getType() == VarType::INT64 && (floatValue < INT64_MIN || floatValue > INT64_MAX)) {
-                        throw std::runtime_error("Float value " + std::to_string(floatValue) + 
-                                               " out of bounds for int64");
-                    }
-                }
-            }
-            else if (auto numberExpr = dynamic_cast<NumberExpr*>(decl.getValue().get())) {
-                const BigInt& bigValue = numberExpr->getValue();
-                if (!TypeBounds::checkBounds(decl.getType(), bigValue)) {
-                    throw std::runtime_error(
-                        "Value " + bigValue.toString() + " out of bounds for type " + 
-                        TypeBounds::getTypeName(decl.getType()) + ". " +
-                        "Valid range: " + TypeBounds::getTypeRange(decl.getType())
-                    );
-                }
-            }
-
-            if (!isFloatType && value->getType() != varType && value->getType()->isIntegerTy()) {
-                if (value->getType()->getIntegerBitWidth() < varType->getIntegerBitWidth()) {
-                    value = builder.CreateSExt(value, varType);
-                } else {
-                    value = builder.CreateTrunc(value, varType);
-                }
-            }
-
-            if (value->getType() != varType) {
-                if (decl.getType() == VarType::FLOAT32 && value->getType()->isDoubleTy()) {
-                    value = builder.CreateFPTrunc(value, varType);
-                }
-                else if (decl.getType() == VarType::FLOAT64 && value->getType()->isFloatTy()) {
-                    value = builder.CreateFPExt(value, varType);
-                }
-                else {
-                    std::string expectedType = varType->getTypeID() == Type::FloatTyID ? "float32" :
-                                              varType->getTypeID() == Type::DoubleTyID ? "float64" : "integer";
-                    std::string actualType = value->getType()->getTypeID() == Type::FloatTyID ? "float32" :
-                                            value->getType()->getTypeID() == Type::DoubleTyID ? "float64" : "integer";
-                    throw std::runtime_error("Type mismatch in variable declaration for " + decl.getName() + 
-                                           ": expected " + expectedType + ", got " + actualType);
-                }
-            }
-
-            builder.CreateStore(value, alloca);
-        }
-    }
-    else {
-        if (decl.getType() == VarType::FLOAT32) {
-            auto zero = ConstantFP::get(Type::getFloatTy(context.getContext()), 0.0);
-            builder.CreateStore(zero, alloca);
-        }
-        else if (decl.getType() == VarType::FLOAT64) {
-            auto zero = ConstantFP::get(Type::getDoubleTy(context.getContext()), 0.0);
-            builder.CreateStore(zero, alloca);
-        }
-        else if (decl.getType() == VarType::UINT0) {
-            auto zero = ConstantInt::get(Type::getInt1Ty(context.getContext()), 0);
-            builder.CreateStore(zero, alloca);
-        }
-        else if (decl.getType() != VarType::STRING) {
-            auto zero = ConstantInt::get(varType, 0);
-            builder.CreateStore(zero, alloca);
-        }
-    }
-
-    context.getNamedValues()[decl.getName()] = alloca;
-    context.getVariableTypes()[decl.getName()] = decl.getType();
-
-    if (decl.getIsConst()) {
-        context.getConstVariables().insert(decl.getName());
-    }
-
-    return alloca;
 }
 
-llvm::Value* StatementCodeGen::codegenAssignment(CodeGen& context, AssignmentStmt& stmt) {
-    auto var = context.lookupVariable(stmt.getName());
-    if (!var) {
-        throw std::runtime_error("Unknown variable: " + stmt.getName());
-    }
-
-    if (context.isVariableConst(stmt.getName())) {
-        throw std::runtime_error("Cannot assign to const variable: " + stmt.getName());
-    }
-
-    VarType varType = context.lookupVariableType(stmt.getName());
-    if (varType == VarType::VOID) {
-        throw std::runtime_error("Unknown variable type for: " + stmt.getName());
-    }
-    
-    if (varType == VarType::UINT0) {
-        throw std::runtime_error("Cannot assign to uint0 — value is always 0");
-    }
-
-    auto value = stmt.getValue()->codegen(context);
-    auto& builder = context.getBuilder();
-    
-    llvm::Type* expectedType = context.getLLVMType(varType);
-    
-    if (value->getType() != expectedType) {
-        if (expectedType->isFPOrFPVectorTy() && value->getType()->isFPOrFPVectorTy()) {
-            if (varType == VarType::FLOAT32 && value->getType()->isDoubleTy()) {
-                value = builder.CreateFPTrunc(value, expectedType);
-            } else if (varType == VarType::FLOAT64 && value->getType()->isFloatTy()) {
-                value = builder.CreateFPExt(value, expectedType);
-            }
-        }
-        else if (expectedType->isFPOrFPVectorTy() && value->getType()->isIntegerTy()) {
-            value = builder.CreateSIToFP(value, expectedType);
-        }
-        else if (expectedType->isIntegerTy() && value->getType()->isFPOrFPVectorTy()) {
-            value = builder.CreateFPToSI(value, expectedType);
-        }
-        else if (expectedType->isIntegerTy() && value->getType()->isIntegerTy()) {
-            if (value->getType()->getIntegerBitWidth() < expectedType->getIntegerBitWidth()) {
-                value = builder.CreateSExt(value, expectedType);
-            } else {
-                value = builder.CreateTrunc(value, expectedType);
-            }
-        }
-    }
-    
-    if (value->getType() != expectedType) {
-        throw std::runtime_error("Type mismatch in assignment to variable: " + stmt.getName());
-    }
-
-    builder.CreateStore(value, var);
-    return value;
-}
-
-llvm::Value* StatementCodeGen::codegenExprStmt(CodeGen& context, ExprStmt& stmt) {
-    return stmt.getExpr()->codegen(context);
-}
 llvm::Value* StatementCodeGen::codegenProgram(CodeGen& context, Program& program) {
     auto& builder = context.getBuilder();
     auto& module = context.getModule();
     auto& llvmContext = context.getContext();
     
-    std::cout << "DEBUG: First pass - generating global variables and functions" << std::endl;
+    std::cout << "DEBUG: First pass - generating enum declarations" << std::endl;
     
+    for (size_t i = 0; i < program.getStatements().size(); i++) {
+        auto& stmt = program.getStatements()[i];
+        if (auto* enumDecl = dynamic_cast<EnumDecl*>(stmt.get())) {
+            std::cout << "DEBUG: Generating enum: " << enumDecl->getName() << std::endl;
+            enumDecl->codegen(context);
+        }
+    }
+    
+    std::cout << "DEBUG: Second pass - generating global variables and functions" << std::endl;
+
     for (size_t i = 0; i < program.getStatements().size(); i++) {
         auto& stmt = program.getStatements()[i];
         if (auto* varDecl = dynamic_cast<VariableDecl*>(stmt.get())) {
@@ -1117,7 +1186,6 @@ llvm::Value* StatementCodeGen::codegenForLoopStmt(CodeGen& context, ForLoopStmt&
     for (auto& bodyStmt : stmt.getBody()->getStatements()) {
         bodyStmt->codegen(context);
     }
-   
 
     if (!builder.GetInsertBlock()->getTerminator()) {
         builder.CreateBr(incrementBlock);
@@ -1151,5 +1219,40 @@ llvm::Value* StatementCodeGen::codegenForLoopStmt(CodeGen& context, ForLoopStmt&
    
     context.exitScope();
    
+    return nullptr;
+}
+
+llvm::Value* StatementCodeGen::codegenEnumDecl(CodeGen& context, EnumDecl& decl) {
+    auto& module = context.getModule();
+    auto& llvmContext = context.getContext();
+    
+    for (const auto& member : decl.getMembers()) {
+        std::string fullName = decl.getName() + "." + member.first;
+        
+        auto value = member.second->codegen(context);
+        
+        llvm::Value* intValue = value;
+        if (!value->getType()->isIntegerTy()) {
+            auto& builder = context.getBuilder();
+            if (value->getType()->isFPOrFPVectorTy()) {
+                intValue = builder.CreateFPToSI(value, llvm::Type::getInt32Ty(llvmContext));
+            } else {
+                throw std::runtime_error("Enum values must be integers");
+            }
+        }
+        
+        llvm::GlobalVariable* enumValue = new llvm::GlobalVariable(
+            module,
+            llvm::Type::getInt32Ty(llvmContext),
+            true,
+            llvm::GlobalValue::InternalLinkage,
+            llvm::cast<llvm::Constant>(intValue),
+            fullName
+        );
+        
+        context.getNamedValues()[fullName] = enumValue;
+        context.getVariableTypes()[fullName] = VarType::INT32;
+    }
+    
     return nullptr;
 }

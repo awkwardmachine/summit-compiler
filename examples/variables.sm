@@ -1,12 +1,6 @@
-const lib = @import("std");
-const output = lib.io;
+const std = @import("std");
 
-func main() -> int32
-    var x: int8 = 5;
-    while (x < 10) then
-        x++;
-        output.println(x);
-    end
-    output.println("Hello, world!");
+func main() -> uint0
+    std.io.println("Hello, world!");
     ret 0;
 end

@@ -8,8 +8,8 @@
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Module.h>
 #include "ast/ast_types.h"
-#include <map>           // ADD THIS
-#include <iostream>      // ADD THIS
+#include <map>
+#include <iostream>
 #include <unordered_map>
 
 namespace AST {
@@ -35,6 +35,8 @@ namespace AST {
     class ForLoopStmt;
     class ModuleExpr;
     class MemberAccessExpr;
+    class EnumDecl;
+    class EnumValueExpr;
     class Program;
 }
 
@@ -48,7 +50,7 @@ class CodeGen {
     std::vector<std::unordered_map<std::string, AST::VarType>> variableTypesStack;
     std::vector<std::unordered_set<std::string>> constVariablesStack;
     std::map<std::string, llvm::Value*> moduleReferences;
-    std::map<std::string, std::string> moduleIdentities; // FIXED: now with proper includes
+    std::map<std::string, std::string> moduleIdentities;
     std::unordered_map<std::string, llvm::Value*> moduleReferencesMap;
 public:
     CodeGen();
@@ -90,6 +92,7 @@ public:
     llvm::Value* codegen(AST::BooleanExpr& expr);
     llvm::Value* codegen(AST::ModuleExpr& expr);
     llvm::Value* codegen(AST::MemberAccessExpr& expr);
+    llvm::Value* codegen(AST::EnumValueExpr& expr);
     
     /* Statement code generation methods */
     llvm::Value* codegen(AST::VariableDecl& decl);
@@ -101,6 +104,7 @@ public:
     llvm::Value* codegen(AST::ReturnStmt& stmt);
     llvm::Value* codegen(AST::WhileStmt& stmt);
     llvm::Value* codegen(AST::ForLoopStmt& stmt);
+    llvm::Value* codegen(AST::EnumDecl& expr);
     llvm::Value* codegen(AST::Program& program);
     
     /* Debugging and output methods */

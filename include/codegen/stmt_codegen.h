@@ -14,4 +14,5 @@ namespace StatementCodeGen {
     llvm::Value* codegenReturnStmt(CodeGen& context, AST::ReturnStmt& stmt);
     llvm::Value* codegenWhileStmt(CodeGen& context, AST::WhileStmt& stmt);
     llvm::Value* codegenForLoopStmt(CodeGen& context, AST::ForLoopStmt& stmt);
+    llvm::Value* codegenEnumDecl(CodeGen& context, AST::EnumDecl& stmt);
 }

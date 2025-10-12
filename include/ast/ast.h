@@ -517,6 +517,52 @@ public:
         return oss.str();
     }
 };
+
+class EnumDecl : public Stmt {
+    std::string name;
+    std::vector<std::pair<std::string, std::unique_ptr<Expr>>> members;
+public:
+    EnumDecl(const std::string& name, 
+             std::vector<std::pair<std::string, std::unique_ptr<Expr>>> members)
+        : name(name), members(std::move(members)) {}
+    
+    llvm::Value* codegen(::CodeGen& context) override;
+    
+    const std::string& getName() const { return name; }
+    const std::vector<std::pair<std::string, std::unique_ptr<Expr>>>& getMembers() const { return members; }
+    
+    std::string toString(int indent = 0) const override {
+        std::ostringstream oss;
+        oss << indentStr(indent) << "EnumDecl: " << quoted(name) 
+            << " with " << members.size() << " member(s)\n";
+        for (const auto& member : members) {
+            oss << indentStr(indent + 1) << quoted(member.first) << " = ";
+            if (member.second) {
+                oss << member.second->toString(0);
+            } else {
+                oss << "auto";
+            }
+            oss << "\n";
+        }
+        return oss.str();
+    }
+};
+class EnumValueExpr : public Expr {
+    std::string enumName;
+    std::string memberName;
+public:
+    EnumValueExpr(const std::string& enumName, const std::string& memberName)
+        : enumName(enumName), memberName(memberName) {}
+    
+    llvm::Value* codegen(::CodeGen& context) override;
+    
+    const std::string& getEnumName() const { return enumName; }
+    const std::string& getMemberName() const { return memberName; }
+    
+    std::string toString(int indent = 0) const override {
+        return indentStr(indent) + "EnumValueExpr: " + enumName + "." + memberName;
+    }
+};
 class Program {
     std::vector<std::unique_ptr<Stmt>> statements;
     std::string entryPointFunction;

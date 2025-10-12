@@ -5,6 +5,7 @@
 #include <vector>
 #include <memory>
 #include <string>
+#include <unordered_set>
 
 class Parser {
 private:
@@ -34,6 +35,7 @@ private:
     std::unique_ptr<AST::Stmt> parseAssignmentOrIncrement();
     std::unique_ptr<AST::Stmt> parseForLoopStatement();
     std::unique_ptr<AST::Expr> parseBuiltinCall();
+    std::unique_ptr<AST::Stmt> parseEnumDeclaration();
     std::unique_ptr<AST::Expr> parseMemberAccess(std::unique_ptr<AST::Expr> object);
 
     std::unique_ptr<AST::Expr> parseExpressionFromString(const std::string& exprStr);
@@ -49,8 +51,16 @@ private:
     std::string getSourceLine(size_t line);
     void error(const std::string& msg);
     void errorAt(const Token& tok, const std::string& msg);
+    void registerEnumType(const std::string& name) {
+        enumTypes.insert(name);
+    }
+    
+    bool isEnumType(const std::string& name) {
+        return enumTypes.find(name) != enumTypes.end();
+    }
 
 public:
     Parser(std::vector<Token> tokens, const std::string& source);
     std::unique_ptr<AST::Program> parse();
+    std::unordered_set<std::string> enumTypes;
 };

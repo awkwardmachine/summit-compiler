@@ -24,6 +24,7 @@ namespace AST {
         FLOAT64,
         STRING,
         MODULE,
+        ENUM,
         VOID
     };
 

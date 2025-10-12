@@ -91,3 +91,11 @@ llvm::Value* ModuleExpr::codegen(::CodeGen& context) {
 llvm::Value* MemberAccessExpr::codegen(::CodeGen& context) {
     return context.codegen(*this);
 }
+
+llvm::Value* EnumValueExpr::codegen(::CodeGen& context) {
+    return context.codegen(*this);
+}
+
+llvm::Value* EnumDecl::codegen(::CodeGen& context) {
+    return context.codegen(*this);
+}

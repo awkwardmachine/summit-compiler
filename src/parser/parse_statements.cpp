@@ -14,6 +14,56 @@ unique_ptr<Stmt> Parser::parseEntrypointStatement() {
     return make_unique<EntrypointStmt>();
 }
 
+unique_ptr<Stmt> Parser::parseEnumDeclaration() {
+    if (!match(TokenType::ENUM)) error("Expected 'enum'");
+    if (!match(TokenType::IDENTIFIER)) error("Expected enum name");
+    string name = tokens[current - 1].value;
+    
+    registerEnumType(name);
+    
+    vector<pair<string, unique_ptr<Expr>>> members;
+    int currentValue = 0;
+    
+    while (!check(TokenType::END) && !isAtEnd()) {
+        if (!match(TokenType::IDENTIFIER)) error("Expected enum member name");
+        string memberName = tokens[current - 1].value;
+        
+        unique_ptr<Expr> value = nullptr;
+        if (match(TokenType::EQUALS)) {
+            value = parseExpression();
+        } else {
+            value = make_unique<NumberExpr>(std::to_string(currentValue));
+        }
+        
+        members.emplace_back(memberName, move(value));
+        
+        if (auto* numExpr = dynamic_cast<NumberExpr*>(members.back().second.get())) {
+            try {
+                currentValue = std::stoi(numExpr->getValue().toString()) + 1;
+            } catch (...) {
+                currentValue++;
+            }
+        } else {
+            currentValue++;
+        }
+        
+        if (!check(TokenType::END)) {
+            if (!match(TokenType::COMMA)) {
+                if (check(TokenType::IDENTIFIER)) {
+                    continue;
+                }
+                break;
+            }
+        } else {
+            break;
+        }
+    }
+    
+    if (!match(TokenType::END)) error("Expected 'end' after enum members");
+    
+    return make_unique<EnumDecl>(name, move(members));
+}
+
 unique_ptr<Stmt> Parser::parseVariableDeclaration() {
     bool isConst = match(TokenType::CONST);
     if (!isConst && !match(TokenType::VAR)) error("Expected 'var' or 'const'");
@@ -418,6 +468,9 @@ unique_ptr<Stmt> Parser::parseStatement() {
     }
     if (check(TokenType::FOR)) {
         return parseForLoopStatement();
+    }
+    if (check(TokenType::ENUM)) {
+        return parseEnumDeclaration();
     }
     if (check(TokenType::VAR) || check(TokenType::CONST)) {
         return parseVariableDeclaration();

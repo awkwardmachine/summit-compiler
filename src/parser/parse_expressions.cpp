@@ -78,7 +78,19 @@ unique_ptr<Expr> Parser::parsePrimary() {
         
         if (match(TokenType::DOT)) {
             auto object = make_unique<VariableExpr>(name);
-            return parseMemberAccess(move(object));
+            auto memberAccess = parseMemberAccess(move(object));
+            
+            if (check(TokenType::LPAREN)) {
+                advance();
+                vector<unique_ptr<Expr>> args;
+                if (!check(TokenType::RPAREN)) {
+                    do { args.push_back(parseExpression()); } while(match(TokenType::COMMA));
+                }
+                if (!match(TokenType::RPAREN)) error("Expected ')' after function arguments");
+                return make_unique<CallExpr>(move(memberAccess), move(args));
+            }
+            
+            return memberAccess;
         }
         
         if (match(TokenType::LPAREN)) {
@@ -89,6 +101,7 @@ unique_ptr<Expr> Parser::parsePrimary() {
             if (!match(TokenType::RPAREN)) error("Expected ')' after function arguments");
             return make_unique<CallExpr>(name, move(args));
         }
+        
         return make_unique<VariableExpr>(name);
     }
 
@@ -210,21 +223,35 @@ unique_ptr<Expr> Parser::parseBinaryExpression(int minPrecedence) {
     }
     return left;
 }
-
 unique_ptr<Expr> Parser::parseMemberAccess(unique_ptr<Expr> object) {
     if (!match(TokenType::IDENTIFIER)) {
         error("Expected identifier after '.'");
     }
     string member = tokens[current - 1].value;
 
+    if (auto* varExpr = dynamic_cast<VariableExpr*>(object.get())) {
+        std::string varName = varExpr->getName();
+        
+        if (isEnumType(varName)) {
+            return make_unique<EnumValueExpr>(varName, member);
+        }
+        
+        if (!varName.empty() && isupper(varName[0])) {
+            return make_unique<EnumValueExpr>(varName, member);
+        }
+    }
     auto memberAccess = make_unique<MemberAccessExpr>(move(object), member);
 
     if (match(TokenType::LPAREN)) {
         vector<unique_ptr<Expr>> args;
         if (!check(TokenType::RPAREN)) {
-            do { args.push_back(parseExpression()); } while(match(TokenType::COMMA));
+            do { 
+                args.push_back(parseExpression()); 
+            } while (match(TokenType::COMMA));
         }
-        if (!match(TokenType::RPAREN)) error("Expected ')' after function arguments");
+        if (!match(TokenType::RPAREN)) {
+            error("Expected ')' after function arguments");
+        }
         return make_unique<CallExpr>(move(memberAccess), move(args));
     }
 
