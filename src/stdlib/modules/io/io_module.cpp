@@ -13,6 +13,10 @@ llvm::Value* IOModule::getMember(CodeGen& context, const std::string& moduleName
     if (member == "print") {
         return createPrintFunction(context);
     }
+
+    if (member == "readln") {
+        return createReadlnFunction(context);
+    }
     
     throw std::runtime_error("Unknown member '" + member + "' in module 'io'");
 }
@@ -39,4 +43,17 @@ llvm::Value* IOModule::createPrintFunction(CodeGen& context) {
         printlnFunc = llvm::Function::Create(printlnType, llvm::Function::ExternalLinkage, "io_print_str", &module);
     }
     return printlnFunc;
+}
+
+llvm::Value* IOModule::createReadlnFunction(CodeGen& context) {
+    auto& module = context.getModule();
+    auto readlnFunc = module.getFunction("io_readln");
+    if (!readlnFunc) {
+        auto& llvmContext = context.getContext();
+        auto* i8Ptr = llvm::PointerType::get(llvm::Type::getInt8Ty(llvmContext), 0);
+        // io_readln returns char* (string)
+        auto readlnType = llvm::FunctionType::get(i8Ptr, false);
+        readlnFunc = llvm::Function::Create(readlnType, llvm::Function::ExternalLinkage, "io_readln", &module);
+    }
+    return readlnFunc;
 }

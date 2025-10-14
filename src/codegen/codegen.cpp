@@ -306,7 +306,7 @@ bool CodeGen::compileToExecutable(const std::string& outputFilename, bool verbos
         std::cerr << "Generated object file: " << objFilename << std::endl;
     }
 
-    std::string stdlibPath = "lib/libsummit_stdlib.a";
+    std::string stdlibPath = "lib/libsummit.a";
     bool useStdlib = !noStdlib;
     
     if (useStdlib) {

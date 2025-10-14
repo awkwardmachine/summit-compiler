@@ -2,6 +2,10 @@ const lib = @import("std");
 const out = lib.io;
 
 func main() -> uint0
-    out.println("Hi");
+    out.print("Enter your name: ");
+    
+    var x: str = out.readln();
+    out.println("Your name is " + x);
     ret 0;
 end
+ 

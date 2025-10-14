@@ -3,6 +3,8 @@
 #include <stdint.h>
 #include <string.h>
 #include <stdbool.h>
+#include <limits.h>
+#include <errno.h>
 
 void io_print_str(const char* str) {
     if (str) {
@@ -18,6 +20,24 @@ void io_println_str(const char* str) {
         printf("\n");
     }
     fflush(stdout);
+}
+
+char* io_readln() {
+    char* line = NULL;
+    size_t len = 0;
+    ssize_t read;
+    
+    read = getline(&line, &len, stdin);
+    if (read == -1) {
+        free(line);
+        return NULL;
+    }
+    
+    if (read > 0 && line[read - 1] == '\n') {
+        line[read - 1] = '\0';
+    }
+    
+    return line;
 }
 
 char* int8_to_string(int8_t value) {

@@ -10,4 +10,5 @@ public:
 private:
     llvm::Value* createPrintlnFunction(CodeGen& context);
     llvm::Value* createPrintFunction(CodeGen& context);
+    llvm::Value* createReadlnFunction(CodeGen& context);
 };
