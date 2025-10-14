@@ -1,11 +1,60 @@
 const lib = @import("std");
 const out = lib.io;
+const math = lib.math;
 
 func main() -> uint0
-    out.print("Enter your name: ");
+    out.println("Calculator");
+    out.println("1: Add");
+    out.println("2: Subtract"); 
+    out.println("3: Multiply");
+    out.println("4: Divide");
+    out.println("0: Exit");
     
-    var x: str = out.readln();
-    out.println("Your name is " + x);
+    var running: bool = 1;
+    
+    while (running) then
+        out.print("Choose operation (0-4): ");
+        var choice: int32 = out.read_int();
+        
+        if (choice == 0) then
+            out.println("Goodbye!");
+            running = 0;
+        elseif (choice >= 1 && choice <= 4) then
+            out.print("Enter first number: ");
+            var num1: float64 = out.read_int();
+            
+            out.print("Enter second number: ");
+            var num2: float64 = out.read_int();
+            
+            var result: float64 = 0.0;
+            var error: str = "";
+            
+            if (choice == 1) then
+                result = num1 + num2;
+            elseif (choice == 2) then
+                result = num1 - num2;
+            elseif (choice == 3) then
+                result = num1 * num2;
+            elseif (choice == 4) then
+                if (num2 == 0.0) then
+                    error = "Error: Division by zero!";
+                else
+                    result = num1 / num2;
+                end
+            end
+            
+            if (error != "") then
+                out.println(error);
+            else
+                out.println("Result: " + (result as str));
+            end
+            
+            out.println("");
+        else
+            out.println("Invalid choice! Please enter 0-4.");
+            out.println("");
+        end
+    end
+    
     ret 0;
 end
- 

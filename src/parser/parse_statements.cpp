@@ -491,9 +491,9 @@ unique_ptr<Stmt> Parser::parseStatement() {
 
 unique_ptr<Stmt> Parser::parseAssignmentOrIncrement() {
     string name = peek().value;
-    advance();
     
-    if (check(TokenType::INCREMENT) || check(TokenType::DECREMENT)) {
+    if (checkNext(TokenType::INCREMENT) || checkNext(TokenType::DECREMENT)) {
+        advance();
         bool isIncrement = (peek().type == TokenType::INCREMENT);
         advance();
         
@@ -508,9 +508,10 @@ unique_ptr<Stmt> Parser::parseAssignmentOrIncrement() {
         return make_unique<AssignmentStmt>(name, move(binExpr));
     }
     
-    if (check(TokenType::PLUS_EQUALS) || check(TokenType::MINUS_EQUALS) ||
-        check(TokenType::STAR_EQUALS) || check(TokenType::SLASH_EQUALS)) {
+    if (checkNext(TokenType::PLUS_EQUALS) || checkNext(TokenType::MINUS_EQUALS) ||
+        checkNext(TokenType::STAR_EQUALS) || checkNext(TokenType::SLASH_EQUALS)) {
         
+        advance();
         TokenType opToken = peek().type;
         advance();
         
@@ -534,11 +535,18 @@ unique_ptr<Stmt> Parser::parseAssignmentOrIncrement() {
         return make_unique<AssignmentStmt>(name, move(binExpr));
     }
     
-    if (check(TokenType::EQUALS)) {
-        return parseAssignment();
+    if (checkNext(TokenType::EQUALS)) {
+        advance();
+        advance();
+        auto value = parseExpression();
+        
+        const Token& lastToken = tokens[current - 1];
+        if (!match(TokenType::SEMICOLON)) {
+            errorAt(lastToken, "Expected ';' after assignment");
+        }
+        return make_unique<AssignmentStmt>(name, move(value));
     }
     
-    current--;
     auto expr = parseExpression();
     
     const Token& lastToken = tokens[current - 1];

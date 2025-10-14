@@ -1,5 +1,9 @@
 #include "bounds.h"
 #include "ast/ast.h"
+#include <map>
+#include <string>
+#include <optional>
+#include <utility>
 
 /* Using the AST namespace */
 using namespace AST;
@@ -230,4 +234,62 @@ bool TypeBounds::isUnsignedType(VarType type) {
             type == VarType::UINT24 || type == VarType::UINT32 || 
             type == VarType::UINT48 || type == VarType::UINT64 ||
             type == VarType::UINT0);
+}
+
+
+static std::map<std::string, AST::VarType> typeNameMap = {
+    {"int4", AST::VarType::INT4},
+    {"int8", AST::VarType::INT8},
+    {"int12", AST::VarType::INT12},
+    {"int16", AST::VarType::INT16},
+    {"int24", AST::VarType::INT24},
+    {"int32", AST::VarType::INT32},
+    {"int48", AST::VarType::INT48},
+    {"int64", AST::VarType::INT64},
+    {"uint0", AST::VarType::UINT0},
+    {"uint4", AST::VarType::UINT4},
+    {"uint8", AST::VarType::UINT8},
+    {"uint12", AST::VarType::UINT12},
+    {"uint16", AST::VarType::UINT16},
+    {"uint24", AST::VarType::UINT24},
+    {"uint32", AST::VarType::UINT32},
+    {"uint48", AST::VarType::UINT48},
+    {"uint64", AST::VarType::UINT64},
+    {"float32", AST::VarType::FLOAT32},
+    {"float64", AST::VarType::FLOAT64},
+    {"bool", AST::VarType::BOOL},
+    {"str", AST::VarType::STRING}
+};
+
+AST::VarType TypeBounds::stringToType(const std::string& typeName) {
+    auto it = typeNameMap.find(typeName);
+    if (it != typeNameMap.end()) {
+        return it->second;
+    }
+    return AST::VarType::VOID;
+}
+
+std::optional<std::pair<int64_t, int64_t>> TypeBounds::getBounds(VarType type) {
+    switch (type) {
+        case VarType::INT4: return {{-8, 7}};
+        case VarType::INT8: return {{-128, 127}};
+        case VarType::INT12: return {{-2048, 2047}};
+        case VarType::INT16: return {{-32768, 32767}};
+        case VarType::INT24: return {{-8388608, 8388607}};
+        case VarType::INT32: return {{-2147483648, 2147483647}};
+        case VarType::INT48: return {{-140737488355328LL, 140737488355327LL}};
+        case VarType::INT64: return {{-9223372036854775807LL - 1, 9223372036854775807LL}};
+        
+        case VarType::UINT0: return {{0, 0}};
+        case VarType::UINT4: return {{0, 15}};
+        case VarType::UINT8: return {{0, 255}};
+        case VarType::UINT12: return {{0, 4095}};
+        case VarType::UINT16: return {{0, 65535}};
+        case VarType::UINT24: return {{0, 16777215}};
+        case VarType::UINT32: return {{0, 4294967295}};
+        case VarType::UINT48: return {{0, 281474976710655LL}};
+        case VarType::UINT64: return {{0, 18446744073709551615ULL}};
+        
+        default: return std::nullopt;
+    }
 }

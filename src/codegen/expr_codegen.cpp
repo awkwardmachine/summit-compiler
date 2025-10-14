@@ -425,7 +425,6 @@ llvm::Value* ExpressionCodeGen::codegenBinary(CodeGen& context, BinaryExpr& expr
         default: throw std::runtime_error("Unknown binary operator");
     }
 }
-
 llvm::Value* ExpressionCodeGen::codegenCall(CodeGen& context, CallExpr& expr) {
     auto& module = context.getModule();
     auto& builder = context.getBuilder();
@@ -440,6 +439,14 @@ llvm::Value* ExpressionCodeGen::codegenCall(CodeGen& context, CallExpr& expr) {
     if (expr.getCalleeExpr()) {
         auto calleeValue = expr.getCalleeExpr()->codegen(context);
         
+        bool isMathFunction = false;
+        std::string funcName;
+        
+        if (auto* func = dyn_cast<Function>(calleeValue)) {
+            funcName = func->getName().str();
+            isMathFunction = (funcName.find("math_") == 0);
+        }
+        
         bool isPrintCall = false;
         bool isPrintlnCall = false;
         
@@ -448,10 +455,38 @@ llvm::Value* ExpressionCodeGen::codegenCall(CodeGen& context, CallExpr& expr) {
             isPrintCall = (funcName == "io_print_str" || funcName == "print");
             isPrintlnCall = (funcName == "io_println_str" || funcName == "println");
         }
+
+        bool isReadIntCall = false;
+        if (auto* func = dyn_cast<Function>(calleeValue)) {
+            std::string funcName = func->getName().str();
+            isReadIntCall = (funcName == "io_read_int" || funcName == "read_int");
+        }
         
         std::vector<llvm::Value*> args;
         for (auto& argExpr : expr.getArgs()) {
             auto argValue = argExpr->codegen(context);
+
+            if (isMathFunction) {
+                if (auto* func = dyn_cast<Function>(calleeValue)) {
+                    auto funcType = func->getFunctionType();
+                    size_t argIndex = args.size();
+                    
+                    if (argIndex < funcType->getNumParams()) {
+                        llvm::Type* expectedType = funcType->getParamType(argIndex);
+                        
+                        if (expectedType->isFloatTy() && argValue->getType()->isIntegerTy()) {
+                            std::cout << "DEBUG: Converting integer to float for math function argument" << std::endl;
+                            argValue = builder.CreateSIToFP(argValue, Type::getFloatTy(llvmContext));
+                        }
+                        else if (expectedType->isFloatTy() && argValue->getType()->isDoubleTy()) {
+                            argValue = builder.CreateFPTrunc(argValue, Type::getFloatTy(llvmContext));
+                        }
+                        else if (expectedType->isFloatTy() && argValue->getType()->isDoubleTy()) {
+                            argValue = builder.CreateFPTrunc(argValue, Type::getFloatTy(llvmContext));
+                        }
+                    }
+                }
+            }
             
             if ((isPrintlnCall || isPrintCall) && !argValue->getType()->isPointerTy()) {
                 argValue = AST::convertToString(context, argValue);
@@ -465,8 +500,55 @@ llvm::Value* ExpressionCodeGen::codegenCall(CodeGen& context, CallExpr& expr) {
                 throw std::runtime_error("Function not properly initialized");
             }
             
+            auto funcType = func->getFunctionType();
+            for (size_t i = 0; i < args.size() && i < funcType->getNumParams(); ++i) {
+                llvm::Type* expectedType = funcType->getParamType(i);
+                llvm::Type* actualType = args[i]->getType();
+                
+                if (actualType != expectedType) {
+                    std::cout << "DEBUG: Type mismatch in argument " << i 
+                              << ": expected ";
+                    expectedType->print(llvm::errs());
+                    std::cout << ", got ";
+                    actualType->print(llvm::errs());
+                    std::cout << std::endl;
+                    
+                    if (expectedType->isFloatTy() && actualType->isIntegerTy()) {
+                        args[i] = builder.CreateSIToFP(args[i], Type::getFloatTy(llvmContext));
+                        std::cout << "DEBUG: Converted integer to float" << std::endl;
+                    } else if (expectedType->isFloatTy() && actualType->isDoubleTy()) {
+                        args[i] = builder.CreateFPTrunc(args[i], Type::getFloatTy(llvmContext));
+                        std::cout << "DEBUG: Converted double to float" << std::endl;
+                    } else if (expectedType->isIntegerTy() && actualType->isFloatTy()) {
+                        args[i] = builder.CreateFPToSI(args[i], expectedType);
+                        std::cout << "DEBUG: Converted float to integer" << std::endl;
+                    } else {
+                        std::string expectedTypeStr;
+                        llvm::raw_string_ostream expectedOS(expectedTypeStr);
+                        expectedType->print(expectedOS);
+                        
+                        std::string actualTypeStr;
+                        llvm::raw_string_ostream actualOS(actualTypeStr);
+                        actualType->print(actualOS);
+                        
+                        throw std::runtime_error("Type mismatch in argument " + std::to_string(i) + 
+                                               " for function '" + funcName + "': expected " + 
+                                               expectedTypeStr + ", got " + actualTypeStr);
+                    }
+                }
+            }
+            
             FunctionCallee callee(func->getFunctionType(), func);
-            return builder.CreateCall(callee, args);
+            llvm::Value* callResult = builder.CreateCall(callee, args);
+            
+            if (isReadIntCall) {
+                std::string targetType = context.getCurrentTargetType();
+                if (!targetType.empty()) {
+                    callResult = addSimpleBoundsChecking(context, callResult, targetType);
+                }
+            }
+            
+            return callResult;
         } else {
             if (calleeValue->getType()->isPointerTy()) {
                 auto funcType = FunctionType::get(
@@ -492,7 +574,16 @@ llvm::Value* ExpressionCodeGen::codegenCall(CodeGen& context, CallExpr& expr) {
         auto functionHandler = manager.findFunctionHandler(functionName, expr.getArgs().size());
         if (functionHandler) {
             std::cout << "DEBUG: Using function handler for: " << functionName << std::endl;
-            return functionHandler->generateCall(context, expr);
+            llvm::Value* callResult = functionHandler->generateCall(context, expr);
+            
+            if (functionName == "read_int") {
+                std::string targetType = context.getCurrentTargetType();
+                if (!targetType.empty()) {
+                    callResult = addSimpleBoundsChecking(context, callResult, targetType);
+                }
+            }
+            
+            return callResult;
         } else {
             std::cout << "DEBUG: No function handler found for: " << functionName << std::endl;
         }
@@ -549,12 +640,7 @@ llvm::Value* ExpressionCodeGen::codegenCall(CodeGen& context, CallExpr& expr) {
                     }
                 }
                 else if (expectedType->isFPOrFPVectorTy() && argValue->getType()->isIntegerTy()) {
-                    VarType sourceType = AST::inferSourceType(argValue, context);
-                    if (TypeBounds::isUnsignedType(sourceType)) {
-                        argValue = builder.CreateUIToFP(argValue, expectedType);
-                    } else {
-                        argValue = builder.CreateSIToFP(argValue, expectedType);
-                    }
+                    argValue = builder.CreateSIToFP(argValue, expectedType);
                 }
                 else if (expectedType->isIntegerTy() && argValue->getType()->isFPOrFPVectorTy()) {
                     argValue = builder.CreateFPToSI(argValue, expectedType);
@@ -585,10 +671,98 @@ llvm::Value* ExpressionCodeGen::codegenCall(CodeGen& context, CallExpr& expr) {
         }
         
         std::cout << "DEBUG: Creating call to function: " << functionName << std::endl;
-        return builder.CreateCall(func, args);
+        llvm::Value* callResult = builder.CreateCall(func, args);
+        
+        if (functionName == "read_int") {
+            std::string targetType = context.getCurrentTargetType();
+            if (!targetType.empty()) {
+                callResult = addSimpleBoundsChecking(context, callResult, targetType);
+            }
+        }
+        
+        return callResult;
     }
     
     throw std::runtime_error("Invalid call expression");
+}
+
+llvm::Value* ExpressionCodeGen::addSimpleBoundsChecking(CodeGen& context, llvm::Value* value, const std::string& targetType) {
+    auto& builder = context.getBuilder();
+    auto& llvmContext = context.getContext();
+    
+    VarType varType = TypeBounds::stringToType(targetType);
+    if (varType == VarType::VOID) {
+        std::cout << "DEBUG: Unknown target type for bounds checking: " << targetType << std::endl;
+        return value;
+    }
+    
+    auto bounds = TypeBounds::getBounds(varType);
+    if (!bounds.has_value()) {
+        std::cout << "DEBUG: No bounds available for type: " << targetType << std::endl;
+        return value;
+    }
+    
+    auto [minVal, maxVal] = bounds.value();
+    
+    llvm::Value* minBound = llvm::ConstantInt::get(llvm::Type::getInt64Ty(llvmContext), minVal);
+    llvm::Value* maxBound = llvm::ConstantInt::get(llvm::Type::getInt64Ty(llvmContext), maxVal);
+    
+    llvm::Value* isGeMin;
+    llvm::Value* isLeMax;
+    
+    if (TypeBounds::isUnsignedType(varType)) {
+        isGeMin = builder.CreateICmpUGE(value, minBound, "bounds_uge_min");
+        isLeMax = builder.CreateICmpULE(value, maxBound, "bounds_ule_max");
+    } else {
+        isGeMin = builder.CreateICmpSGE(value, minBound, "bounds_sge_min");
+        isLeMax = builder.CreateICmpSLE(value, maxBound, "bounds_sle_max");
+    }
+    
+    llvm::Value* isInBounds = builder.CreateAnd(isGeMin, isLeMax, "bounds_check");
+    
+    llvm::Function* currentFunc = builder.GetInsertBlock()->getParent();
+    llvm::BasicBlock* errorBlock = llvm::BasicBlock::Create(llvmContext, "bounds_error", currentFunc);
+    llvm::BasicBlock* continueBlock = llvm::BasicBlock::Create(llvmContext, "bounds_ok", currentFunc);
+    
+    builder.CreateCondBr(isInBounds, continueBlock, errorBlock);
+    
+    builder.SetInsertPoint(errorBlock);
+    {
+        std::string errorMsg = "Error: value %lld out of bounds for " + targetType + 
+                              " (must be between " + std::to_string(minVal) + 
+                              " and " + std::to_string(maxVal) + ")\n";
+        llvm::Value* errorStr = builder.CreateGlobalStringPtr(errorMsg);
+        
+        auto& module = context.getModule();
+        auto* i8Ptr = llvm::PointerType::get(llvm::Type::getInt8Ty(llvmContext), 0);
+        auto fprintfType = llvm::FunctionType::get(llvm::Type::getInt32Ty(llvmContext), {i8Ptr, i8Ptr}, true);
+        auto fprintfFunc = module.getFunction("fprintf");
+        if (!fprintfFunc) {
+            fprintfFunc = llvm::Function::Create(fprintfType, llvm::Function::ExternalLinkage, "fprintf", &module);
+        }
+        
+        llvm::GlobalVariable* stderrVar = module.getNamedGlobal("stderr");
+        if (!stderrVar) {
+            stderrVar = new llvm::GlobalVariable(module, i8Ptr, false, 
+                                                llvm::GlobalValue::ExternalLinkage,
+                                                nullptr, "stderr");
+        }
+        llvm::Value* stderrVal = builder.CreateLoad(i8Ptr, stderrVar);
+
+        builder.CreateCall(fprintfFunc, {stderrVal, errorStr, value});
+        
+        auto exitType = llvm::FunctionType::get(llvm::Type::getVoidTy(llvmContext), {llvm::Type::getInt32Ty(llvmContext)}, false);
+        auto exitFunc = module.getFunction("exit");
+        if (!exitFunc) {
+            exitFunc = llvm::Function::Create(exitType, llvm::Function::ExternalLinkage, "exit", &module);
+        }
+        builder.CreateCall(exitFunc, {llvm::ConstantInt::get(llvm::Type::getInt32Ty(llvmContext), 1)});
+        builder.CreateUnreachable();
+    }
+    
+    builder.SetInsertPoint(continueBlock);
+    
+    return value;
 }
 
 llvm::Value* ExpressionCodeGen::codegenBoolean(CodeGen& context, BooleanExpr& expr) {

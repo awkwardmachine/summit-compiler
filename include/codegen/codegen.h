@@ -69,6 +69,10 @@ public:
     std::unordered_map<std::string, AST::VarType>& getVariableTypes();
     std::unordered_set<std::string>& getConstVariables();
 
+    void setCurrentTargetType(const std::string& type) { currentTargetType = type; }
+    std::string getCurrentTargetType() const { return currentTargetType; }
+    void clearCurrentTargetType() { currentTargetType.clear(); }
+
     /* Cross-scope variable lookup */
     llvm::Value* lookupVariable(const std::string& name);
     AST::VarType lookupVariableType(const std::string& name);
@@ -145,4 +149,6 @@ public:
         moduleReferences.clear();
         moduleIdentities.clear();
     }
+private:
+    std::string currentTargetType;
 };

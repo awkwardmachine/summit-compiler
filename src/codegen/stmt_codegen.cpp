@@ -232,7 +232,11 @@ llvm::Value* StatementCodeGen::codegenVariableDecl(CodeGen& context, VariableDec
         llvm::AllocaInst* alloca = entryBuilder.CreateAlloca(llvmType, nullptr, name);
         
         if (valueExpr) {
+            context.setCurrentTargetType(TypeBounds::getTypeName(type));
+            
             auto value = valueExpr->codegen(context);
+            
+            context.clearCurrentTargetType();
             
             if (value->getType() != llvmType) {
                 if (llvmType->isIntegerTy() && value->getType()->isIntegerTy()) {

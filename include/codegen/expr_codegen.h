@@ -19,4 +19,6 @@ namespace ExpressionCodeGen {
     llvm::Value* codegenEnumValue(CodeGen& context, AST::EnumValueExpr& expr);
     std::string extractModuleName(CodeGen& context, const std::string& varName);
     llvm::Value* handleModuleMemberAccess(CodeGen& context, const std::string& moduleName, const std::string& member);
+
+    llvm::Value* addSimpleBoundsChecking(CodeGen& context, llvm::Value* value, const std::string& targetType);
 }
