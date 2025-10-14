@@ -11,7 +11,7 @@
 #include "parser/parser.h"
 #include "codegen/codegen.h"
 #include "ast/ast.h"
-#include "codegen/summit_stdlib.h"
+#include "stdlib/core/stdlib_manager.h"
 
 using namespace std;
 
@@ -47,10 +47,12 @@ void printHelp(const string& prog) {
     cout << "  --keep-ir           Keep the generated IR file\n";
     cout << "  --run               Run the produced executable after successful build\n";
     cout << "  --verbose           Print extra compilation info\n";
+    cout << "  --no-stdlib         Compile without linking the standard library\n";
     cout << "  --version           Print version and exit\n";
     cout << "  --help              Show this help\n";
     cout << "\nExample:\n  " << prog << " -o myprog --run hello.sm\n";
     cout << "  " << prog << " --target x86_64-pc-linux-gnu -o hello_linux hello.sm\n";
+    cout << "  " << prog << " --no-stdlib -o minimal minimal.sm\n";
 }
 
 int main(int argc, char* argv[]) {
@@ -70,6 +72,7 @@ int main(int argc, char* argv[]) {
     bool keepIR = false;
     bool runAfter = false;
     bool verbose = false;
+    bool noStdlib = false;
 
     vector<string> args(argv + 1, argv + argc);
 
@@ -94,6 +97,7 @@ int main(int argc, char* argv[]) {
         else if (a == "--keep-ir") { keepIR = true; }
         else if (a == "--run") { runAfter = true; }
         else if (a == "--verbose") { verbose = true; }
+        else if (a == "--no-stdlib") { noStdlib = true; }
         else if (a == "-o") {
             if (i + 1 >= args.size()) { cerr << "-o expects a value\n"; return 1; }
             outputName = args[++i];
@@ -126,6 +130,9 @@ int main(int argc, char* argv[]) {
         if (verbose) {
             cerr << "Input: " << inputFilename << "\n";
             cerr << "Output: " << outputName << "\n";
+            if (noStdlib) {
+                cerr << "Standard library: disabled\n";
+            }
         }
 
         string source = readFile(inputFilename);
@@ -147,7 +154,11 @@ int main(int argc, char* argv[]) {
         }
 
         CodeGen codegen;
-        StandardLibrary::initialize(codegen);
+        
+        if (!noStdlib) {
+            StdLibManager::getInstance().initializeStandardLibrary(!noStdlib);
+        }
+        
         ast->codegen(codegen);
 
         if (printIR) {
@@ -170,7 +181,7 @@ int main(int argc, char* argv[]) {
             }
         }
 
-        if (!codegen.compileToExecutable(outputName, verbose, targetTriple)) {
+        if (!codegen.compileToExecutable(outputName, verbose, targetTriple, noStdlib)) {
             cerr << "Failed to compile executable.\n";
             return 1;
         }

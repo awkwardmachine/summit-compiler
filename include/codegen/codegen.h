@@ -7,10 +7,11 @@
 #include <llvm/IR/IRBuilder.h>
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Module.h>
-#include "ast/ast_types.h"
 #include <map>
 #include <iostream>
 #include <unordered_map>
+
+#include "ast/ast_types.h"
 
 namespace AST {
     enum class VarType;
@@ -51,6 +52,7 @@ class CodeGen {
     std::vector<std::unordered_set<std::string>> constVariablesStack;
     std::map<std::string, llvm::Value*> moduleReferences;
     std::map<std::string, std::string> moduleIdentities;
+    std::map<std::string, std::string> moduleAliases;
     std::unordered_map<std::string, llvm::Value*> moduleReferencesMap;
 public:
     CodeGen();
@@ -110,13 +112,18 @@ public:
     /* Debugging and output methods */
     void printIR();
     void printIRToFile(const std::string& filename);
-    bool compileToExecutable(const std::string& outputFilename, bool verbose = false, const std::string& targetTriple = "");
+    bool compileToExecutable(const std::string& outputFilename, bool verbose = false, 
+                        const std::string& targetTriple = "", bool noStdlib = false);
 
+    /* Module alias management */
     void setModuleReference(const std::string& varName, llvm::Value* module, const std::string& actualModuleName) {
         moduleReferences[varName] = module;
         moduleIdentities[varName] = actualModuleName;
         std::cout << "DEBUG: Tracked module alias: " << varName << " -> " << actualModuleName << std::endl;
     }
+
+    void registerModuleAlias(const std::string& alias, const std::string& actualModuleName, llvm::Value* moduleValue);
+    std::string resolveModuleAlias(const std::string& name) const;
     
     llvm::Value* getModuleReference(const std::string& varName) const {
         auto it = moduleReferences.find(varName);

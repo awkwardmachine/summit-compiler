@@ -13,6 +13,7 @@
 #include <llvm/IR/LegacyPassManager.h>
 #include <system_error>
 #include <cstdlib>
+#include <fstream>
 
 /* Using LLVM and AST namespaces */
 using namespace llvm;
@@ -24,7 +25,6 @@ CodeGen::CodeGen() {
     irBuilder = std::make_unique<IRBuilder<>>(*llvmContext);
     llvmModule = std::make_unique<Module>("summit", *llvmContext);
 
-    // Start global scope
     enterScope();
 }
 
@@ -206,12 +206,33 @@ llvm::Value* CodeGen::codegen(AST::EnumDecl& expr) {
     return StatementCodeGen::codegenEnumDecl(*this, expr);
 }
 
+void CodeGen::registerModuleAlias(const std::string& alias, const std::string& actualModuleName, llvm::Value* moduleValue) {
+    moduleAliases[alias] = actualModuleName;
+    moduleReferences[alias] = moduleValue;
+    moduleIdentities[alias] = actualModuleName;
+    
+    std::cout << "DEBUG: Registered module alias: " << alias << " -> " << actualModuleName << std::endl;
+}
+
+std::string CodeGen::resolveModuleAlias(const std::string& name) const {
+    auto aliasIt = moduleAliases.find(name);
+    if (aliasIt != moduleAliases.end()) {
+        return aliasIt->second;
+    }
+    
+    auto identityIt = moduleIdentities.find(name);
+    if (identityIt != moduleIdentities.end()) {
+        return identityIt->second;
+    }
+    
+    return "";
+}
+
 /* Print LLVM IR to stdout */
 void CodeGen::printIR() {
     llvmModule->print(outs(), nullptr);
 }
 
-/* Print LLVM IR to file */
 void CodeGen::printIRToFile(const std::string& filename) {
     std::error_code EC;
     llvm::raw_fd_ostream out(filename, EC);
@@ -219,7 +240,7 @@ void CodeGen::printIRToFile(const std::string& filename) {
     llvmModule->print(out, nullptr);
 }
 
-bool CodeGen::compileToExecutable(const std::string& outputFilename, bool verbose, const std::string& targetTriple) {
+bool CodeGen::compileToExecutable(const std::string& outputFilename, bool verbose, const std::string& targetTriple, bool noStdlib) {
     llvm::InitializeAllTargetInfos();
     llvm::InitializeAllTargets();
     llvm::InitializeAllTargetMCs();
@@ -241,6 +262,9 @@ bool CodeGen::compileToExecutable(const std::string& outputFilename, bool verbos
 
     if (verbose) {
         std::cerr << "Target triple: " << triple << std::endl;
+        if (noStdlib) {
+            std::cerr << "Standard library: disabled" << std::endl;
+        }
     }
 
     std::string error;
@@ -282,6 +306,19 @@ bool CodeGen::compileToExecutable(const std::string& outputFilename, bool verbos
         std::cerr << "Generated object file: " << objFilename << std::endl;
     }
 
+    std::string stdlibPath = "lib/libsummit_stdlib.a";
+    bool useStdlib = !noStdlib;
+    
+    if (useStdlib) {
+        std::ifstream stdlibCheck(stdlibPath);
+        if (!stdlibCheck.good()) {
+            std::cerr << "Warning: Standard library not found at " << stdlibPath << std::endl;
+            std::cerr << "Run ./build_stdlib.sh to build the standard library" << std::endl;
+            std::cerr << "Or use --no-stdlib to compile without standard library" << std::endl;
+            return false;
+        }
+    }
+
     std::string linkCmd;
     bool isWindows = (triple.find("windows") != std::string::npos || 
                      triple.find("mingw") != std::string::npos ||
@@ -292,20 +329,33 @@ bool CodeGen::compileToExecutable(const std::string& outputFilename, bool verbos
         if (exeName.length() < 4 || exeName.substr(exeName.length() - 4) != ".exe") {
             exeName += ".exe";
         }
-        linkCmd = "clang++ -target " + triple + " -o " + exeName + " " + objFilename;
+        if (useStdlib) {
+            linkCmd = "clang++ -target " + triple + " -o " + exeName + " " + objFilename + " " + stdlibPath;
+        } else {
+            linkCmd = "clang++ -target " + triple + " -o " + exeName + " " + objFilename;
+        }
         if (verbose) linkCmd += " -v";
     } else {
-        linkCmd = "clang++ -target " + triple + " -o " + outputFilename + " " + objFilename;
+        if (useStdlib) {
+            linkCmd = "clang++ -target " + triple + " -o " + outputFilename + " " + objFilename + " " + stdlibPath;
+        } else {
+            linkCmd = "clang++ -target " + triple + " -o " + outputFilename + " " + objFilename;
+        }
         if (verbose) linkCmd += " -v";
     }
 
     if (verbose) {
-        std::cerr << "Linking: " << linkCmd << std::endl;
+        std::cerr << "Linking command: " << linkCmd << std::endl;
     }
 
     int result = std::system(linkCmd.c_str());
     
     std::remove(objFilename.c_str());
 
-    return result == 0;
+    if (result != 0) {
+        std::cerr << "Linking failed" << std::endl;
+        return false;
+    }
+
+    return true;
 }

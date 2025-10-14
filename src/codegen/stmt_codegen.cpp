@@ -1,15 +1,15 @@
 #include "stmt_codegen.h"
 #include "codegen.h"
 #include "ast/ast.h"
-#include <llvm/IR/Verifier.h>
-#include <llvm/IR/BasicBlock.h>
 #include "codegen/bounds.h"
 #include "type_inference.h"
 #include "expr_codegen.h"
 
+#include <llvm/IR/Verifier.h>
+#include <llvm/IR/BasicBlock.h>
+
 using namespace llvm;
 using namespace AST;
-
 
 llvm::Constant* createDefaultValue(llvm::Type* type, VarType varType) {
     if (type->isIntegerTy()) {
@@ -382,11 +382,9 @@ llvm::Value* StatementCodeGen::codegenGlobalVariable(CodeGen& context, VariableD
                 context.getNamedValues()[decl.getName()] = globalVar;
                 context.getVariableTypes()[decl.getName()] = decl.getType();
                 
-                auto stdModule = context.lookupVariable("std");
-                if (stdModule) {
-                    context.setModuleReference(decl.getName(), stdModule, "std");
-                    std::cout << "DEBUG: Created global module alias: " << decl.getName() << " -> std" << std::endl;
-                }
+                context.registerModuleAlias(decl.getName(), "std", globalVar);
+                
+                std::cout << "DEBUG: Created global module alias: " << decl.getName() << " -> std" << std::endl;
                 
                 if (decl.getIsConst()) {
                     context.getConstVariables().insert(decl.getName());
@@ -399,25 +397,51 @@ llvm::Value* StatementCodeGen::codegenGlobalVariable(CodeGen& context, VariableD
         }
         else if (auto* memberAccess = dynamic_cast<MemberAccessExpr*>(decl.getValue().get())) {
             if (auto* varExpr = dynamic_cast<VariableExpr*>(memberAccess->getObject().get())) {
-                std::string moduleName = varExpr->getName();
+                std::string baseVarName = varExpr->getName();
                 std::string memberName = memberAccess->getMember();
                 
-                auto baseVar = context.lookupVariable(moduleName);
+                std::string actualModuleName = context.resolveModuleAlias(baseVarName);
+                if (!actualModuleName.empty()) {
+                    auto moduleType = context.getLLVMType(VarType::MODULE);
+                    initialValue = ConstantAggregateZero::get(moduleType);
+                    
+                    auto globalVar = new llvm::GlobalVariable(
+                        module,
+                        moduleType,
+                        decl.getIsConst(),
+                        llvm::GlobalValue::ExternalLinkage,
+                        initialValue,
+                        decl.getName()
+                    );
+                    
+                    context.getNamedValues()[decl.getName()] = globalVar;
+                    context.getVariableTypes()[decl.getName()] = VarType::MODULE;
+                    
+                    context.registerModuleAlias(decl.getName(), memberName, globalVar);
+                    
+                    std::cout << "DEBUG: Created module member alias: " << decl.getName() 
+                              << " -> " << memberName << " (via " << baseVarName << " -> " 
+                              << actualModuleName << ")" << std::endl;
+                    
+                    if (decl.getIsConst()) {
+                        context.getConstVariables().insert(decl.getName());
+                    }
+                    
+                    return globalVar;
+                }
+                
+                auto baseVar = context.lookupVariable(baseVarName);
                 if (baseVar) {
-                    auto baseType = context.lookupVariableType(moduleName);
+                    auto baseType = context.lookupVariableType(baseVarName);
                     if (baseType == VarType::MODULE) {
-                        std::string actualModuleName = context.getModuleIdentity(moduleName);
+                        std::string actualModuleName = context.getModuleIdentity(baseVarName);
                         if (!actualModuleName.empty()) {
-                            moduleName = actualModuleName;
-                        }
-                        
-                        if (moduleName == "std" && memberName == "io") {
-                            auto ioType = context.getLLVMType(VarType::MODULE);
-                            initialValue = ConstantAggregateZero::get(ioType);
+                            auto moduleType = context.getLLVMType(VarType::MODULE);
+                            initialValue = ConstantAggregateZero::get(moduleType);
                             
                             auto globalVar = new llvm::GlobalVariable(
                                 module,
-                                ioType,
+                                moduleType,
                                 decl.getIsConst(),
                                 llvm::GlobalValue::ExternalLinkage,
                                 initialValue,
@@ -426,9 +450,12 @@ llvm::Value* StatementCodeGen::codegenGlobalVariable(CodeGen& context, VariableD
                             
                             context.getNamedValues()[decl.getName()] = globalVar;
                             context.getVariableTypes()[decl.getName()] = VarType::MODULE;
-                            context.setModuleReference(decl.getName(), globalVar, "io");
                             
-                            std::cout << "DEBUG: Created global module alias: " << decl.getName() << " -> io" << std::endl;
+                            std::string targetModule = actualModuleName + "." + memberName;
+                            context.registerModuleAlias(decl.getName(), targetModule, globalVar);
+                            
+                            std::cout << "DEBUG: Created module member alias: " << decl.getName() 
+                                      << " -> " << targetModule << std::endl;
                             
                             if (decl.getIsConst()) {
                                 context.getConstVariables().insert(decl.getName());
@@ -439,7 +466,27 @@ llvm::Value* StatementCodeGen::codegenGlobalVariable(CodeGen& context, VariableD
                     }
                 }
             }
-            throw std::runtime_error("Global variables can only be initialized with constant expressions or module members");
+
+            try {
+                auto value = decl.getValue()->codegen(context);
+                if (llvm::isa<llvm::Constant>(value)) {
+                    auto globalVar = new llvm::GlobalVariable(
+                        module,
+                        value->getType(),
+                        decl.getIsConst(),
+                        llvm::GlobalValue::InternalLinkage,
+                        llvm::cast<llvm::Constant>(value),
+                        decl.getName()
+                    );
+                    context.getNamedValues()[decl.getName()] = globalVar;
+                    context.getVariableTypes()[decl.getName()] = decl.getType();
+                    return globalVar;
+                } else {
+                    throw std::runtime_error("Global variables can only be initialized with constant expressions or module members");
+                }
+            } catch (const std::exception& e) {
+                throw std::runtime_error("Global variables can only be initialized with constant expressions or module members: " + std::string(e.what()));
+            }
         }
         else if (auto* enumValue = dynamic_cast<EnumValueExpr*>(decl.getValue().get())) {
             std::string fullEnumName = enumValue->getEnumName() + "." + enumValue->getMemberName();
@@ -503,7 +550,26 @@ llvm::Value* StatementCodeGen::codegenGlobalVariable(CodeGen& context, VariableD
             initialValue = ConstantInt::get(Type::getInt1Ty(llvmContext), boolExpr->getValue() ? 1 : 0);
         }
         else {
-            throw std::runtime_error("Global variables can only be initialized with constant expressions");
+            try {
+                auto value = decl.getValue()->codegen(context);
+                if (llvm::isa<llvm::Constant>(value)) {
+                    auto globalVar = new llvm::GlobalVariable(
+                        module,
+                        value->getType(),
+                        decl.getIsConst(),
+                        llvm::GlobalValue::InternalLinkage,
+                        llvm::cast<llvm::Constant>(value),
+                        decl.getName()
+                    );
+                    context.getNamedValues()[decl.getName()] = globalVar;
+                    context.getVariableTypes()[decl.getName()] = decl.getType();
+                    return globalVar;
+                } else {
+                    throw std::runtime_error("Global variables can only be initialized with constant expressions");
+                }
+            } catch (const std::exception& e) {
+                throw std::runtime_error("Global variables can only be initialized with constant expressions: " + std::string(e.what()));
+            }
         }
     } else {
         if (decl.getType() == VarType::FLOAT32) {

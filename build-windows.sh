@@ -1,7 +1,7 @@
 set -euo pipefail
 
 if [[ -z "${MSYSTEM:-}" ]]; then
-    echo "❌ Please run this script inside an MSYS2 shell (UCRT64, CLANG64, or MINGW64)."
+    echo "Please run this script inside an MSYS2 shell (UCRT64, CLANG64, or MINGW64)."
     exit 1
 fi
 
@@ -55,7 +55,7 @@ build() {
     
     OBJS=$(find "$BUILD_DIR" -name '*.o')
     if [[ -z "$OBJS" ]]; then
-        echo "❌ No object files found to link."
+        echo "No object files found to link."
         exit 1
     fi
     
@@ -77,8 +77,8 @@ build() {
     done
     
     END_TIME=$(date +%s)
-    echo "✅ Done: $TARGET"
-    echo "⏱ Compilation time: $((END_TIME - START_TIME))s"
+    echo "Done: $TARGET"
+    echo "Compilation time: $((END_TIME - START_TIME))s"
 }
 
 clean() {
