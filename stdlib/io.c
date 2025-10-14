@@ -40,14 +40,6 @@ char* io_readln() {
     
     return line;
 }
-#include <stdio.h>
-#include <stdlib.h>
-#include <stdint.h>
-#include <string.h>
-#include <stdbool.h>
-#include <limits.h>
-#include <errno.h>
-#include <ctype.h>
 
 uint64_t io_read_int() {
     char* input = io_readln();
