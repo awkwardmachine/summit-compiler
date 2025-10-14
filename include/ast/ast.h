@@ -563,6 +563,29 @@ public:
         return indentStr(indent) + "EnumValueExpr: " + enumName + "." + memberName;
     }
 };
+
+class BreakStmt : public Stmt {
+public:
+    BreakStmt() = default;
+    
+    llvm::Value* codegen(::CodeGen& context) override;
+    
+    std::string toString(int indent = 0) const override {
+        return indentStr(indent) + "BreakStmt";
+    }
+};
+
+class ContinueStmt : public Stmt {
+public:
+    ContinueStmt() = default;
+    
+    llvm::Value* codegen(::CodeGen& context) override;
+    
+    std::string toString(int indent = 0) const override {
+        return indentStr(indent) + "ContinueStmt";
+    }
+};
+
 class Program {
     std::vector<std::unique_ptr<Stmt>> statements;
     std::string entryPointFunction;

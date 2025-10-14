@@ -206,6 +206,14 @@ llvm::Value* CodeGen::codegen(AST::EnumDecl& expr) {
     return StatementCodeGen::codegenEnumDecl(*this, expr);
 }
 
+llvm::Value* CodeGen::codegen(AST::BreakStmt& expr) {
+    return StatementCodeGen::codegenBreakStmt(*this, expr);
+}
+
+llvm::Value* CodeGen::codegen(AST::ContinueStmt& expr) {
+    return StatementCodeGen::codegenContinueStmt(*this, expr);
+}
+
 void CodeGen::registerModuleAlias(const std::string& alias, const std::string& actualModuleName, llvm::Value* moduleValue) {
     moduleAliases[alias] = actualModuleName;
     moduleReferences[alias] = moduleValue;

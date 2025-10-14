@@ -476,6 +476,13 @@ unique_ptr<Stmt> Parser::parseStatement() {
         return parseVariableDeclaration();
     }
     
+    if (check(TokenType::STOP)) {
+        return parseBreakStatement();
+    }
+    if (check(TokenType::NEXT)) {
+        return parseContinueStatement();
+    }
+    
     if (check(TokenType::IDENTIFIER)) {
         return parseAssignmentOrIncrement();
     }
@@ -554,4 +561,30 @@ unique_ptr<Stmt> Parser::parseAssignmentOrIncrement() {
         errorAt(lastToken, "Expected ';' after expression");
     }
     return make_unique<ExprStmt>(move(expr));
+}
+
+unique_ptr<Stmt> Parser::parseBreakStatement() {
+    if (!match(TokenType::STOP)) {
+        error("Expected 'STOP' for break statement");
+    }
+    
+    const Token& lastToken = tokens[current - 1];
+    if (!match(TokenType::SEMICOLON)) {
+        errorAt(lastToken, "Expected ';' after STOP");
+    }
+    
+    return make_unique<BreakStmt>();
+}
+
+unique_ptr<Stmt> Parser::parseContinueStatement() {
+    if (!match(TokenType::NEXT)) {
+        error("Expected 'NEXT' for continue statement");
+    }
+    
+    const Token& lastToken = tokens[current - 1];
+    if (!match(TokenType::SEMICOLON)) {
+        errorAt(lastToken, "Expected ';' after NEXT");
+    }
+    
+    return make_unique<ContinueStmt>();
 }

@@ -6,6 +6,7 @@
 #include <vector>
 #include <llvm/IR/IRBuilder.h>
 #include <llvm/IR/LLVMContext.h>
+#include <llvm/IR/BasicBlock.h>
 #include <llvm/IR/Module.h>
 #include <map>
 #include <iostream>
@@ -38,6 +39,8 @@ namespace AST {
     class MemberAccessExpr;
     class EnumDecl;
     class EnumValueExpr;
+    class BreakStmt;
+    class ContinueStmt;
     class Program;
 }
 
@@ -111,6 +114,8 @@ public:
     llvm::Value* codegen(AST::WhileStmt& stmt);
     llvm::Value* codegen(AST::ForLoopStmt& stmt);
     llvm::Value* codegen(AST::EnumDecl& expr);
+    llvm::Value* codegen(AST::BreakStmt& expr);
+    llvm::Value* codegen(AST::ContinueStmt& expr);
     llvm::Value* codegen(AST::Program& program);
     
     /* Debugging and output methods */
@@ -149,6 +154,30 @@ public:
         moduleReferences.clear();
         moduleIdentities.clear();
     }
+
+    void pushLoopBlocks(llvm::BasicBlock* exitBlock, llvm::BasicBlock* continueBlock) {
+        loopExitBlocks.push_back(exitBlock);
+        loopContinueBlocks.push_back(continueBlock);
+    }
+    
+    void popLoopBlocks() {
+        if (!loopExitBlocks.empty()) {
+            loopExitBlocks.pop_back();
+            loopContinueBlocks.pop_back();
+        }
+    }
+    
+    llvm::BasicBlock* getCurrentLoopExitBlock() const {
+        if (loopExitBlocks.empty()) return nullptr;
+        return loopExitBlocks.back();
+    }
+    
+    llvm::BasicBlock* getCurrentLoopContinueBlock() const {
+        if (loopContinueBlocks.empty()) return nullptr;
+        return loopContinueBlocks.back();
+    }
 private:
     std::string currentTargetType;
+    std::vector<llvm::BasicBlock*> loopExitBlocks;
+    std::vector<llvm::BasicBlock*> loopContinueBlocks;
 };

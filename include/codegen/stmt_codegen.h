@@ -1,6 +1,8 @@
 #pragma once
 #include "codegen.h"
 #include "utils/bigint.h"
+#include "bounds.h"
+#include "ast.h"
 
 namespace StatementCodeGen {
     llvm::Value* codegenVariableDecl(CodeGen& context, AST::VariableDecl& decl);
@@ -15,4 +17,8 @@ namespace StatementCodeGen {
     llvm::Value* codegenWhileStmt(CodeGen& context, AST::WhileStmt& stmt);
     llvm::Value* codegenForLoopStmt(CodeGen& context, AST::ForLoopStmt& stmt);
     llvm::Value* codegenEnumDecl(CodeGen& context, AST::EnumDecl& stmt);
+    llvm::Value* codegenContinueStmt(CodeGen& context, AST::ContinueStmt& stmt);
+    llvm::Value* codegenBreakStmt(CodeGen& context, AST::BreakStmt& stmt);
+
+    llvm::Value* addRuntimeBoundsChecking(CodeGen& context, llvm::Value* value, AST::VarType targetType, const std::string& varName);
 }

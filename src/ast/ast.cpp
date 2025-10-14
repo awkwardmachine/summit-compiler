@@ -99,3 +99,11 @@ llvm::Value* EnumValueExpr::codegen(::CodeGen& context) {
 llvm::Value* EnumDecl::codegen(::CodeGen& context) {
     return context.codegen(*this);
 }
+
+llvm::Value* ContinueStmt::codegen(::CodeGen& context) {
+    return context.codegen(*this);
+}
+
+llvm::Value* BreakStmt::codegen(::CodeGen& context) {
+    return context.codegen(*this);
+}

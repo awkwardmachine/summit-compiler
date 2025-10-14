@@ -36,6 +36,8 @@ private:
     std::unique_ptr<AST::Stmt> parseForLoopStatement();
     std::unique_ptr<AST::Expr> parseBuiltinCall();
     std::unique_ptr<AST::Stmt> parseEnumDeclaration();
+    std::unique_ptr<AST::Stmt> parseBreakStatement();
+    std::unique_ptr<AST::Stmt> parseContinueStatement();
     std::unique_ptr<AST::Expr> parseMemberAccess(std::unique_ptr<AST::Expr> object);
 
     std::unique_ptr<AST::Expr> parseExpressionFromString(const std::string& exprStr);

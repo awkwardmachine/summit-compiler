@@ -4,6 +4,7 @@
 #include "codegen/bounds.h"
 #include "type_inference.h"
 #include "expr_codegen.h"
+#include "bigint.h"
 
 #include <llvm/IR/Verifier.h>
 #include <llvm/IR/BasicBlock.h>
@@ -46,6 +47,30 @@ llvm::Value* StatementCodeGen::codegenVariableDecl(CodeGen& context, VariableDec
         }
         
         if (valueExpr) {
+            if (auto* numberExpr = dynamic_cast<NumberExpr*>(valueExpr.get())) {
+                const BigInt& bigValue = numberExpr->getValue();
+                if (!TypeBounds::checkBounds(type, bigValue)) {
+                    throw std::runtime_error(
+                        "Value " + bigValue.toString() + " out of bounds for type " + 
+                        TypeBounds::getTypeName(type) + ". " +
+                        "Valid range: " + TypeBounds::getTypeRange(type)
+                    );
+                }
+            }
+            else if (auto* floatExpr = dynamic_cast<FloatExpr*>(valueExpr.get())) {
+                if (TypeBounds::isIntegerType(type)) {
+                    double floatValue = floatExpr->getValue();
+                    BigInt bigValue(static_cast<int64_t>(floatValue));
+                    if (!TypeBounds::checkBounds(type, bigValue)) {
+                        throw std::runtime_error(
+                            "Float value " + std::to_string(floatValue) + " out of bounds for type " + 
+                            TypeBounds::getTypeName(type) + ". " +
+                            "Valid range: " + TypeBounds::getTypeRange(type)
+                        );
+                    }
+                }
+            }
+            
             if (auto* moduleExpr = dynamic_cast<ModuleExpr*>(valueExpr.get())) {
                 auto moduleValue = ExpressionCodeGen::codegenModule(context, *moduleExpr);
                 if (moduleValue) {
@@ -127,6 +152,14 @@ llvm::Value* StatementCodeGen::codegenVariableDecl(CodeGen& context, VariableDec
                 }
             }
             else if (auto* numberExpr = dynamic_cast<NumberExpr*>(valueExpr.get())) {
+                const BigInt& bigValue = numberExpr->getValue();
+                if (!TypeBounds::checkBounds(decl.getType(), bigValue)) {
+                    throw std::runtime_error(
+                        "Value " + bigValue.toString() + " out of bounds for type " + 
+                        TypeBounds::getTypeName(decl.getType()) + ". " +
+                        "Valid range: " + TypeBounds::getTypeRange(decl.getType())
+                    );
+                }
                 auto value = ExpressionCodeGen::codegenNumber(context, *numberExpr);
                 if (llvm::isa<llvm::Constant>(value)) {
                     auto globalVar = new llvm::GlobalVariable(
@@ -238,19 +271,40 @@ llvm::Value* StatementCodeGen::codegenVariableDecl(CodeGen& context, VariableDec
             
             context.clearCurrentTargetType();
             
+            if (TypeBounds::isIntegerType(type) && value->getType()->isIntegerTy()) {
+                if (auto* constInt = llvm::dyn_cast<llvm::ConstantInt>(value)) {
+                    BigInt bigValue;
+                    if (TypeBounds::isUnsignedType(type)) {
+                        bigValue = BigInt(constInt->getZExtValue());
+                    } else {
+                        bigValue = BigInt(constInt->getSExtValue());
+                    }
+                    
+                    if (!TypeBounds::checkBounds(type, bigValue)) {
+                        throw std::runtime_error(
+                            "Value " + bigValue.toString() + " out of bounds for type " + 
+                            TypeBounds::getTypeName(type) + " '" + name + "'. " +
+                            "Valid range: " + TypeBounds::getTypeRange(type)
+                        );
+                    }
+                } else {
+                    value = addRuntimeBoundsChecking(context, value, type, name);
+                }
+            }
+            
             if (value->getType() != llvmType) {
                 if (llvmType->isIntegerTy() && value->getType()->isIntegerTy()) {
                     unsigned targetBits = llvmType->getIntegerBitWidth();
                     unsigned sourceBits = value->getType()->getIntegerBitWidth();
                     
-                    if (sourceBits < targetBits) {
+                    if (sourceBits > targetBits) {
+                        value = builder.CreateTrunc(value, llvmType);
+                    } else if (sourceBits < targetBits) {
                         if (TypeBounds::isUnsignedType(type)) {
                             value = builder.CreateZExt(value, llvmType);
                         } else {
                             value = builder.CreateSExt(value, llvmType);
                         }
-                    } else if (sourceBits > targetBits) {
-                        value = builder.CreateTrunc(value, llvmType);
                     }
                 } else if (llvmType->isFPOrFPVectorTy() && value->getType()->isIntegerTy()) {
                     if (TypeBounds::isUnsignedType(AST::inferSourceType(value, context))) {
@@ -289,7 +343,6 @@ llvm::Value* StatementCodeGen::codegenVariableDecl(CodeGen& context, VariableDec
     
     return nullptr;
 }
-
 llvm::Value* StatementCodeGen::codegenAssignment(CodeGen& context, AssignmentStmt& stmt) {
     auto var = context.lookupVariable(stmt.getName());
     if (!var) {
@@ -313,13 +366,41 @@ llvm::Value* StatementCodeGen::codegenAssignment(CodeGen& context, AssignmentStm
     auto& builder = context.getBuilder();
     
     llvm::Type* expectedType = context.getLLVMType(varType);
+
+    if (TypeBounds::isIntegerType(varType) && value->getType()->isIntegerTy()) {
+        if (auto* constInt = llvm::dyn_cast<llvm::ConstantInt>(value)) {
+            BigInt bigValue;
+            if (TypeBounds::isUnsignedType(varType)) {
+                bigValue = BigInt(constInt->getZExtValue());
+            } else {
+                bigValue = BigInt(constInt->getSExtValue());
+            }
+            
+            if (!TypeBounds::checkBounds(varType, bigValue)) {
+                throw std::runtime_error(
+                    "Value " + bigValue.toString() + " out of bounds for type " + 
+                    TypeBounds::getTypeName(varType) + " '" + stmt.getName() + "'. " +
+                    "Valid range: " + TypeBounds::getTypeRange(varType)
+                );
+            }
+        } else {
+            value = addRuntimeBoundsChecking(context, value, varType, stmt.getName());
+        }
+    }
     
     if (value->getType() != expectedType) {
-        if (expectedType->isFPOrFPVectorTy() && value->getType()->isFPOrFPVectorTy()) {
-            if (varType == VarType::FLOAT32 && value->getType()->isDoubleTy()) {
-                value = builder.CreateFPTrunc(value, expectedType);
-            } else if (varType == VarType::FLOAT64 && value->getType()->isFloatTy()) {
-                value = builder.CreateFPExt(value, expectedType);
+        if (expectedType->isIntegerTy() && value->getType()->isIntegerTy()) {
+            unsigned targetBits = expectedType->getIntegerBitWidth();
+            unsigned sourceBits = value->getType()->getIntegerBitWidth();
+            
+            if (sourceBits > targetBits) {
+                value = builder.CreateTrunc(value, expectedType);
+            } else if (sourceBits < targetBits) {
+                if (TypeBounds::isUnsignedType(varType)) {
+                    value = builder.CreateZExt(value, expectedType);
+                } else {
+                    value = builder.CreateSExt(value, expectedType);
+                }
             }
         }
         else if (expectedType->isFPOrFPVectorTy() && value->getType()->isIntegerTy()) {
@@ -344,7 +425,6 @@ llvm::Value* StatementCodeGen::codegenAssignment(CodeGen& context, AssignmentStm
     builder.CreateStore(value, var);
     return value;
 }
-
 llvm::Value* StatementCodeGen::codegenExprStmt(CodeGen& context, ExprStmt& stmt) {
     return stmt.getExpr()->codegen(context);
 }
@@ -1099,7 +1179,6 @@ llvm::Value* StatementCodeGen::codegenReturnStmt(CodeGen& context, ReturnStmt& s
     
     return nullptr;
 }
-
 llvm::Value* StatementCodeGen::codegenWhileStmt(CodeGen& context, WhileStmt& stmt) {
     auto& builder = context.getBuilder();
     auto& llvmContext = context.getContext();
@@ -1109,6 +1188,8 @@ llvm::Value* StatementCodeGen::codegenWhileStmt(CodeGen& context, WhileStmt& stm
     auto conditionBlock = BasicBlock::Create(llvmContext, "while.condition", currentFunction);
     auto bodyBlock = BasicBlock::Create(llvmContext, "while.body");
     auto afterBlock = BasicBlock::Create(llvmContext, "while.end");
+    
+    context.pushLoopBlocks(afterBlock, conditionBlock);
     
     builder.CreateBr(conditionBlock);
     
@@ -1138,6 +1219,8 @@ llvm::Value* StatementCodeGen::codegenWhileStmt(CodeGen& context, WhileStmt& stm
     currentFunction->insert(currentFunction->end(), afterBlock);
     builder.SetInsertPoint(afterBlock);
     
+    context.popLoopBlocks();
+    
     return nullptr;
 }
 
@@ -1152,6 +1235,8 @@ llvm::Value* StatementCodeGen::codegenForLoopStmt(CodeGen& context, ForLoopStmt&
     auto incrementBlock = BasicBlock::Create(llvmContext, "for.increment");
     auto afterBlock = BasicBlock::Create(llvmContext, "for.end");
 
+    context.pushLoopBlocks(afterBlock, incrementBlock);
+
     context.enterScope();
 
     auto varType = stmt.getVarType();
@@ -1163,14 +1248,41 @@ llvm::Value* StatementCodeGen::codegenForLoopStmt(CodeGen& context, ForLoopStmt&
     if (stmt.getInitializer()) {
         auto initValue = stmt.getInitializer()->codegen(context);
 
-        if (auto numberExpr = dynamic_cast<NumberExpr*>(stmt.getInitializer().get())) {
-            const BigInt& bigValue = numberExpr->getValue();
-            if (!TypeBounds::checkBounds(varType, bigValue)) {
-                throw std::runtime_error(
-                    "Value " + bigValue.toString() + " out of bounds for type " + 
-                    TypeBounds::getTypeName(varType) + ". " +
-                    "Valid range: " + TypeBounds::getTypeRange(varType)
-                );
+        if (TypeBounds::isIntegerType(varType) && initValue->getType()->isIntegerTy()) {
+            if (auto* constInt = llvm::dyn_cast<llvm::ConstantInt>(initValue)) {
+                BigInt bigValue;
+                if (TypeBounds::isUnsignedType(varType)) {
+                    bigValue = BigInt(constInt->getZExtValue());
+                } else {
+                    bigValue = BigInt(constInt->getSExtValue());
+                }
+                
+                if (!TypeBounds::checkBounds(varType, bigValue)) {
+                    throw std::runtime_error(
+                        "Value " + bigValue.toString() + " out of bounds for type " + 
+                        TypeBounds::getTypeName(varType) + " '" + stmt.getVarName() + "'. " +
+                        "Valid range: " + TypeBounds::getTypeRange(varType)
+                    );
+                }
+            } else {
+                initValue = addRuntimeBoundsChecking(context, initValue, varType, stmt.getVarName());
+            }
+        }
+
+        if (initValue->getType() != llvmVarType) {
+            if (llvmVarType->isIntegerTy() && initValue->getType()->isIntegerTy()) {
+                unsigned targetBits = llvmVarType->getIntegerBitWidth();
+                unsigned sourceBits = initValue->getType()->getIntegerBitWidth();
+                
+                if (sourceBits > targetBits) {
+                    initValue = builder.CreateTrunc(initValue, llvmVarType);
+                } else if (sourceBits < targetBits) {
+                    if (TypeBounds::isUnsignedType(varType)) {
+                        initValue = builder.CreateZExt(initValue, llvmVarType);
+                    } else {
+                        initValue = builder.CreateSExt(initValue, llvmVarType);
+                    }
+                }
             }
         }
         
@@ -1182,61 +1294,13 @@ llvm::Value* StatementCodeGen::codegenForLoopStmt(CodeGen& context, ForLoopStmt&
 
     context.getNamedValues()[stmt.getVarName()] = alloca;
     context.getVariableTypes()[stmt.getVarName()] = stmt.getVarType();
-
-    if (auto binaryCond = dynamic_cast<BinaryExpr*>(stmt.getCondition().get())) {
-        if (binaryCond->getOp() == BinaryOp::LESS) {
-            if (auto limitNum = dynamic_cast<NumberExpr*>(binaryCond->getRHS().get())) {
-                const BigInt& limit = limitNum->getValue();
-                
-                std::string typeRange = TypeBounds::getTypeRange(varType);
-                size_t toPos = typeRange.find(" to ");
-                if (toPos != std::string::npos) {
-                    try {
-                        int64_t maxVal = std::stoll(typeRange.substr(toPos + 4));
-                        BigInt maxBound(maxVal);
-                        
-                        if (limit > maxBound) {
-                            throw std::runtime_error(
-                                "For loop condition " + stmt.getVarName() + " < " + limit.toString() + 
-                                " would exceed bounds of type " + TypeBounds::getTypeName(varType) + 
-                                ". Valid range: " + typeRange
-                            );
-                        }
-                    } catch (...) {
-                        
-                    }
-                }
-            }
-        }
-        else if (binaryCond->getOp() == BinaryOp::LESS_EQUAL) {
-            if (auto limitNum = dynamic_cast<NumberExpr*>(binaryCond->getRHS().get())) {
-                const BigInt& limit = limitNum->getValue();
-                
-                std::string typeRange = TypeBounds::getTypeRange(varType);
-                size_t toPos = typeRange.find(" to ");
-                if (toPos != std::string::npos) {
-                    try {
-                        int64_t maxVal = std::stoll(typeRange.substr(toPos + 4));
-                        BigInt maxBound(maxVal);
-                        
-                        if (limit > maxBound) {
-                            throw std::runtime_error(
-                                "For loop condition " + stmt.getVarName() + " <= " + limit.toString() + 
-                                " would exceed bounds of type " + TypeBounds::getTypeName(varType) + 
-                                ". Valid range: " + typeRange
-                            );
-                        }
-                    } catch (...) {
-                        
-                    }
-                }
-            }
-        }
-    }
    
     builder.CreateBr(conditionBlock);
    
     builder.SetInsertPoint(conditionBlock);
+    
+    auto currentVal = builder.CreateLoad(llvmVarType, alloca, stmt.getVarName());
+    
     auto condValue = stmt.getCondition()->codegen(context);
 
     if (!condValue->getType()->isIntegerTy(1)) {
@@ -1253,9 +1317,7 @@ llvm::Value* StatementCodeGen::codegenForLoopStmt(CodeGen& context, ForLoopStmt&
     currentFunction->insert(currentFunction->end(), bodyBlock);
     builder.SetInsertPoint(bodyBlock);
    
-    for (auto& bodyStmt : stmt.getBody()->getStatements()) {
-        bodyStmt->codegen(context);
-    }
+    stmt.getBody()->codegen(context);
 
     if (!builder.GetInsertBlock()->getTerminator()) {
         builder.CreateBr(incrementBlock);
@@ -1267,17 +1329,42 @@ llvm::Value* StatementCodeGen::codegenForLoopStmt(CodeGen& context, ForLoopStmt&
     if (stmt.getIncrement()) {
         auto incrementValue = stmt.getIncrement()->codegen(context);
         if (incrementValue) {
-            if (auto numberExpr = dynamic_cast<NumberExpr*>(stmt.getIncrement().get())) {
-                const BigInt& bigValue = numberExpr->getValue();
-                if (!TypeBounds::checkBounds(varType, bigValue)) {
-                    throw std::runtime_error(
-                        "Increment value " + bigValue.toString() + " out of bounds for type " + 
-                        TypeBounds::getTypeName(varType) + ". " +
-                        "Valid range: " + TypeBounds::getTypeRange(varType)
-                    );
+            if (TypeBounds::isIntegerType(varType) && incrementValue->getType()->isIntegerTy()) {
+                if (auto* constInt = llvm::dyn_cast<llvm::ConstantInt>(incrementValue)) {
+                    BigInt bigValue;
+                    if (TypeBounds::isUnsignedType(varType)) {
+                        bigValue = BigInt(constInt->getZExtValue());
+                    } else {
+                        bigValue = BigInt(constInt->getSExtValue());
+                    }
+                    
+                    if (!TypeBounds::checkBounds(varType, bigValue)) {
+                        throw std::runtime_error(
+                            "Increment value " + bigValue.toString() + " out of bounds for type " + 
+                            TypeBounds::getTypeName(varType) + " '" + stmt.getVarName() + "'. " +
+                            "Valid range: " + TypeBounds::getTypeRange(varType)
+                        );
+                    }
+                } else {
+                    incrementValue = addRuntimeBoundsChecking(context, incrementValue, varType, stmt.getVarName() + "_increment");
                 }
             }
             
+            auto currentVal = builder.CreateLoad(llvmVarType, alloca, stmt.getVarName() + ".load");
+            
+            if (incrementValue->getType() != llvmVarType) {
+                if (llvmVarType->isIntegerTy() && incrementValue->getType()->isIntegerTy()) {
+                    unsigned targetBits = llvmVarType->getIntegerBitWidth();
+                    unsigned sourceBits = incrementValue->getType()->getIntegerBitWidth();
+                    
+                    if (sourceBits > targetBits) {
+                        incrementValue = builder.CreateTrunc(incrementValue, llvmVarType);
+                    } else if (sourceBits < targetBits) {
+                        incrementValue = builder.CreateSExt(incrementValue, llvmVarType);
+                    }
+                }
+            }
+
             builder.CreateStore(incrementValue, alloca);
         }
     }
@@ -1288,6 +1375,7 @@ llvm::Value* StatementCodeGen::codegenForLoopStmt(CodeGen& context, ForLoopStmt&
     builder.SetInsertPoint(afterBlock);
    
     context.exitScope();
+    context.popLoopBlocks();
    
     return nullptr;
 }
@@ -1325,4 +1413,113 @@ llvm::Value* StatementCodeGen::codegenEnumDecl(CodeGen& context, EnumDecl& decl)
     }
     
     return nullptr;
+}
+
+llvm::Value* StatementCodeGen::codegenBreakStmt(CodeGen& context, BreakStmt& stmt) {
+    auto& builder = context.getBuilder();
+
+    llvm::BasicBlock* breakBlock = context.getCurrentLoopExitBlock();
+    if (!breakBlock) {
+        throw std::runtime_error("Break statement not inside a loop");
+    }
+    
+    builder.CreateBr(breakBlock);
+
+    return nullptr;
+}
+
+llvm::Value* StatementCodeGen::codegenContinueStmt(CodeGen& context, ContinueStmt& stmt) {
+    auto& builder = context.getBuilder();
+    
+    llvm::BasicBlock* continueBlock = context.getCurrentLoopContinueBlock();
+    if (!continueBlock) {
+        throw std::runtime_error("Continue statement not inside a loop");
+    }
+
+    builder.CreateBr(continueBlock);
+    return nullptr;
+}
+
+llvm::Value* StatementCodeGen::addRuntimeBoundsChecking(CodeGen& context, llvm::Value* value, AST::VarType targetType, const std::string& varName) {
+    auto& builder = context.getBuilder();
+    auto& llvmContext = context.getContext();
+    auto& module = context.getModule();
+    
+    auto bounds = AST::TypeBounds::getBounds(targetType);
+    if (!bounds.has_value()) {
+        return value;
+    }
+    
+    auto [minVal, maxVal] = bounds.value();
+    
+    llvm::Value* minBound = llvm::ConstantInt::get(llvm::Type::getInt64Ty(llvmContext), minVal);
+    llvm::Value* maxBound = llvm::ConstantInt::get(llvm::Type::getInt64Ty(llvmContext), maxVal);
+
+    llvm::Value* value64;
+    if (value->getType()->isIntegerTy()) {
+        if (AST::TypeBounds::isUnsignedType(targetType)) {
+            value64 = builder.CreateZExt(value, llvm::Type::getInt64Ty(llvmContext));
+        } else {
+            value64 = builder.CreateSExt(value, llvm::Type::getInt64Ty(llvmContext));
+        }
+    } else {
+        return value;
+    }
+    
+    llvm::Value* isGeMin;
+    llvm::Value* isLeMax;
+    
+    if (AST::TypeBounds::isUnsignedType(targetType)) {
+        isGeMin = builder.CreateICmpUGE(value64, minBound, varName + "_bounds_uge_min");
+        isLeMax = builder.CreateICmpULE(value64, maxBound, varName + "_bounds_ule_max");
+    } else {
+        isGeMin = builder.CreateICmpSGE(value64, minBound, varName + "_bounds_sge_min");
+        isLeMax = builder.CreateICmpSLE(value64, maxBound, varName + "_bounds_sle_max");
+    }
+    
+    llvm::Value* isInBounds = builder.CreateAnd(isGeMin, isLeMax, varName + "_bounds_check");
+
+    llvm::Function* currentFunc = builder.GetInsertBlock()->getParent();
+    llvm::BasicBlock* errorBlock = llvm::BasicBlock::Create(llvmContext, varName + "_bounds_error", currentFunc);
+    llvm::BasicBlock* continueBlock = llvm::BasicBlock::Create(llvmContext, varName + "_bounds_ok", currentFunc);
+
+    builder.CreateCondBr(isInBounds, continueBlock, errorBlock);
+
+    builder.SetInsertPoint(errorBlock);
+    {
+        std::string errorMsg = "Error: value %lld out of bounds for " + 
+                              AST::TypeBounds::getTypeName(targetType) + " '" + varName + 
+                              "' (must be between " + std::to_string(minVal) + 
+                              " and " + std::to_string(maxVal) + ")\n";
+        llvm::Value* errorStr = builder.CreateGlobalStringPtr(errorMsg);
+
+        auto* i8Ptr = llvm::PointerType::get(llvm::Type::getInt8Ty(llvmContext), 0);
+        auto fprintfType = llvm::FunctionType::get(llvm::Type::getInt32Ty(llvmContext), {i8Ptr, i8Ptr}, true);
+        auto fprintfFunc = module.getFunction("fprintf");
+        if (!fprintfFunc) {
+            fprintfFunc = llvm::Function::Create(fprintfType, llvm::Function::ExternalLinkage, "fprintf", &module);
+        }
+        
+        llvm::GlobalVariable* stderrVar = module.getNamedGlobal("stderr");
+        if (!stderrVar) {
+            stderrVar = new llvm::GlobalVariable(module, i8Ptr, false, 
+                                                llvm::GlobalValue::ExternalLinkage,
+                                                nullptr, "stderr");
+        }
+        llvm::Value* stderrVal = builder.CreateLoad(i8Ptr, stderrVar);
+
+        builder.CreateCall(fprintfFunc, {stderrVal, errorStr, value64});
+        
+        auto exitType = llvm::FunctionType::get(llvm::Type::getVoidTy(llvmContext), {llvm::Type::getInt32Ty(llvmContext)}, false);
+        auto exitFunc = module.getFunction("exit");
+        if (!exitFunc) {
+            exitFunc = llvm::Function::Create(exitType, llvm::Function::ExternalLinkage, "exit", &module);
+        }
+        builder.CreateCall(exitFunc, {llvm::ConstantInt::get(llvm::Type::getInt32Ty(llvmContext), 1)});
+        builder.CreateUnreachable();
+    }
+    
+    builder.SetInsertPoint(continueBlock);
+    
+    return value;
 }
