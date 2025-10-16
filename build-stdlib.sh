@@ -73,11 +73,11 @@ done
 echo "Creating static library from ${#OBJECT_FILES[@]} object files..."
 
 if [ "$OS_TYPE" = "windows" ]; then
-    lib.exe /OUT:"$LIB_DIR/summit.lib" "${OBJECT_FILES[@]}" 2>/dev/null
+    lib.exe /OUT:"$LIB_DIR/libsummit.lib" "${OBJECT_FILES[@]}" 2>/dev/null
    
     if [ $? -ne 0 ]; then
         echo "lib.exe not found, trying llvm-lib..."
-        llvm-lib /OUT:"$LIB_DIR/summit.lib" "${OBJECT_FILES[@]}"
+        llvm-lib /OUT:"$LIB_DIR/libsummit.lib" "${OBJECT_FILES[@]}"
        
         if [ $? -ne 0 ]; then
             echo "llvm-lib not found, using ar as fallback..."
@@ -90,17 +90,17 @@ if [ "$OS_TYPE" = "windows" ]; then
             echo "  Static: $LIB_DIR/libsummit.a"
         else
             echo "Standard library built successfully:"
-            echo "  Static: $LIB_DIR/summit.lib"
+            echo "  Static: $LIB_DIR/libsummit.lib"
         fi
     else
         echo "Standard library built successfully:"
-        echo "  Static: $LIB_DIR/summit.lib"
+        echo "  Static: $LIB_DIR/libsummit.lib"
     fi
     
     echo "Creating dynamic library..."
-    clang -shared "${OBJECT_FILES[@]}" -o "$LIB_DIR/summit.dll"
+    clang -shared "${OBJECT_FILES[@]}" -o "$LIB_DIR/libsummit.dll"
     if [ $? -eq 0 ]; then
-        echo "  Dynamic: $LIB_DIR/summit.dll"
+        echo "  Dynamic: $LIB_DIR/libsummit.dll"
         
         FULL_LIB_PATH="$(cd "$LIB_DIR" && pwd)"
         

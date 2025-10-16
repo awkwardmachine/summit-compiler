@@ -337,7 +337,6 @@ void CodeGen::printIRToFile(const std::string& filename) {
     if (EC) throw std::runtime_error("Could not open file: " + filename);
     llvmModule->print(out, nullptr);
 }
-
 bool CodeGen::compileToExecutable(const std::string& outputFilename, bool verbose, const std::string& targetTriple, bool noStdlib) {
     llvm::InitializeAllTargetInfos();
     llvm::InitializeAllTargets();
@@ -360,9 +359,7 @@ bool CodeGen::compileToExecutable(const std::string& outputFilename, bool verbos
 
     if (verbose) {
         std::cerr << "Target triple: " << triple << std::endl;
-        if (noStdlib) {
-            std::cerr << "Standard library: disabled" << std::endl;
-        }
+        if (noStdlib) std::cerr << "Standard library: disabled" << std::endl;
     }
 
     std::string error;
@@ -375,15 +372,12 @@ bool CodeGen::compileToExecutable(const std::string& outputFilename, bool verbos
     auto cpu = "generic";
     auto features = "";
     llvm::TargetOptions opt;
-    auto targetMachine = target->createTargetMachine(
-        triple, cpu, features, opt, llvm::Reloc::PIC_);
-
+    auto targetMachine = target->createTargetMachine(triple, cpu, features, opt, llvm::Reloc::PIC_);
     llvmModule->setDataLayout(targetMachine->createDataLayout());
 
     std::string objFilename = outputFilename + ".o";
     std::error_code EC;
     llvm::raw_fd_ostream dest(objFilename, EC, llvm::sys::fs::OF_None);
-
     if (EC) {
         std::cerr << "Could not open file: " << EC.message() << std::endl;
         return false;
@@ -391,7 +385,6 @@ bool CodeGen::compileToExecutable(const std::string& outputFilename, bool verbos
 
     llvm::legacy::PassManager pass;
     auto fileType = llvm::CodeGenFileType::ObjectFile;
-
     if (targetMachine->addPassesToEmitFile(pass, dest, nullptr, fileType)) {
         std::cerr << "TargetMachine can't emit a file of this type" << std::endl;
         return false;
@@ -400,42 +393,30 @@ bool CodeGen::compileToExecutable(const std::string& outputFilename, bool verbos
     pass.run(*llvmModule);
     dest.flush();
 
-    if (verbose) {
-        std::cerr << "Generated object file: " << objFilename << std::endl;
-    }
+    if (verbose) std::cerr << "Generated object file: " << objFilename << std::endl;
 
     bool isWindows = (triple.find("windows") != std::string::npos ||
                       triple.find("mingw") != std::string::npos ||
                       triple.find("win32") != std::string::npos);
 
-    std::string stdlibPath;
-    std::string dllPath;
+    std::string stdlibPath, dllPath;
     bool useStdlib = !noStdlib;
 
     if (useStdlib) {
         const char* envLib = std::getenv("SUMMIT_LIB");
-        
         if (envLib) {
             std::filesystem::path libPath(envLib);
-            
             if (std::filesystem::is_directory(libPath)) {
                 if (isWindows) {
-                    std::vector<std::string> winLibNames = {"summit.lib", "libsummit.a"};
+                    std::vector<std::string> winLibNames = {"libsummit.lib", "libsummit.a"};
                     for (const auto& libName : winLibNames) {
                         std::filesystem::path fullPath = libPath / libName;
-                        if (std::filesystem::exists(fullPath)) {
-                            stdlibPath = fullPath.string();
-                            break;
-                        }
+                        if (std::filesystem::exists(fullPath)) { stdlibPath = fullPath.string(); break; }
                     }
-                    
-                    std::vector<std::string> winDllNames = {"summit.dll", "libsummit.dll"};
+                    std::vector<std::string> winDllNames = {"libsummit.dll", "libsummit.dll"};
                     for (const auto& dllName : winDllNames) {
                         std::filesystem::path fullDllPath = libPath / dllName;
-                        if (std::filesystem::exists(fullDllPath)) {
-                            dllPath = fullDllPath.string();
-                            break;
-                        }
+                        if (std::filesystem::exists(fullDllPath)) { dllPath = fullDllPath.string(); break; }
                     }
                 } else {
                     std::vector<std::string> unixLibNames = {"libsummit.a", "libsummit.so", "libsummit.dylib"};
@@ -443,71 +424,25 @@ bool CodeGen::compileToExecutable(const std::string& outputFilename, bool verbos
                         std::filesystem::path fullPath = libPath / libName;
                         if (std::filesystem::exists(fullPath)) {
                             stdlibPath = fullPath.string();
-                            if (libName.find(".so") != std::string::npos || 
-                                libName.find(".dylib") != std::string::npos) {
+                            if (libName.find(".so") != std::string::npos || libName.find(".dylib") != std::string::npos)
                                 dllPath = stdlibPath;
-                            }
                             break;
                         }
                     }
                 }
             } else if (std::filesystem::exists(libPath)) {
                 stdlibPath = envLib;
-                
                 std::string ext = libPath.extension().string();
-                if (ext == ".dll" || ext == ".so" || ext == ".dylib") {
-                    dllPath = envLib;
-                }
+                if (ext == ".dll" || ext == ".so" || ext == ".dylib") dllPath = envLib;
             }
         }
-
-        if (stdlibPath.empty()) {
-            if (isWindows) {
-                std::vector<std::string> winLibNames = {"summit.lib", "libsummit.a"};
-                for (const auto& libName : winLibNames) {
-                    std::filesystem::path fullPath = "lib" / std::filesystem::path(libName);
-                    if (std::filesystem::exists(fullPath)) {
-                        stdlibPath = fullPath.string();
-                        break;
-                    }
-                }
-                
-                std::vector<std::string> winDllNames = {"summit.dll", "libsummit.dll"};
-                for (const auto& dllName : winDllNames) {
-                    std::filesystem::path fullDllPath = "lib" / std::filesystem::path(dllName);
-                    if (std::filesystem::exists(fullDllPath)) {
-                        dllPath = fullDllPath.string();
-                        break;
-                    }
-                }
-            } else {
-                std::vector<std::string> unixLibNames = {"libsummit.a", "libsummit.so", "libsummit.dylib"};
-                for (const auto& libName : unixLibNames) {
-                    std::filesystem::path fullPath = "lib" / std::filesystem::path(libName);
-                    if (std::filesystem::exists(fullPath)) {
-                        stdlibPath = fullPath.string();
-                        if (libName.find(".so") != std::string::npos || 
-                            libName.find(".dylib") != std::string::npos) {
-                            dllPath = stdlibPath;
-                        }
-                        break;
-                    }
-                }
-            }
-        }
-
         if (stdlibPath.empty()) {
             std::cerr << "Warning: Standard library not found.\n";
-            std::cerr << "Set SUMMIT_LIB to point to the library directory or specific library file.\n";
-            std::cerr << "Alternatively, place the library in ./lib/\n";
-            std::cerr << "Run ./build_stdlib.sh to build it.\n";
             return false;
         }
-
-        if (verbose) {
-            std::cerr << "Using standard library: " << stdlibPath << std::endl;
-            if (!dllPath.empty())
-                std::cerr << "Using shared library (runtime): " << dllPath << std::endl;
+        if (verbose) { 
+            std::cerr << "Using standard library: " << stdlibPath << std::endl; 
+            if (!dllPath.empty()) std::cerr << "Shared DLL: " << dllPath << std::endl; 
         }
     }
 
@@ -516,20 +451,96 @@ bool CodeGen::compileToExecutable(const std::string& outputFilename, bool verbos
 
     if (isWindows) {
         std::string exeName = outputFilename;
-        if (exeName.length() < 4 || exeName.substr(exeName.length() - 4) != ".exe") {
+        if (exeName.length() < 4 || exeName.substr(exeName.length()-4) != ".exe") 
             exeName += ".exe";
+
+        std::string mainRenameCmd = "objcopy --redefine-sym main=ProgramMain \"" + objFilename + "\"";
+        if (verbose) std::cerr << "Renaming main function: " << mainRenameCmd << std::endl;
+        int renameResult = std::system(mainRenameCmd.c_str());
+        
+        if (renameResult != 0 && verbose) {
+            std::cerr << "Warning: Failed to rename main function (objcopy not available or failed)" << std::endl;
+        }
+
+        std::string wrapperSource = 
+            "#include <windows.h>\n"
+            "#include <cstdio>\n"
+            "#include <io.h>\n"
+            "#include <fcntl.h>\n"
+            "#include <iostream>\n"
+            "\n"
+            "// forward declaration of the actual program main\n"
+            "extern \"C\" int ProgramMain();\n"
+            "\n"
+            "int main() {\n"
+            "    // Allocate a console for this application\n"
+            "    if (AllocConsole()) {\n"
+            "        // redirect stdout\n"
+            "        HANDLE hStdout = GetStdHandle(STD_OUTPUT_HANDLE);\n"
+            "        int fdStdout = _open_osfhandle((intptr_t)hStdout, _O_TEXT);\n"
+            "        FILE* fpStdout = _fdopen(fdStdout, \"w\");\n"
+            "        *stdout = *fpStdout;\n"
+            "        setvbuf(stdout, NULL, _IONBF, 0);\n"
+            "\n"
+            "        // redirect stderr\n"
+            "        HANDLE hStderr = GetStdHandle(STD_ERROR_HANDLE);\n"
+            "        int fdStderr = _open_osfhandle((intptr_t)hStderr, _O_TEXT);\n"
+            "        FILE* fpStderr = _fdopen(fdStderr, \"w\");\n"
+            "        *stderr = *fpStderr;\n"
+            "        setvbuf(stderr, NULL, _IONBF, 0);\n"
+            "\n"
+            "        // redirect stdin\n"
+            "        HANDLE hStdin = GetStdHandle(STD_INPUT_HANDLE);\n"
+            "        int fdStdin = _open_osfhandle((intptr_t)hStdin, _O_TEXT);\n"
+            "        FILE* fpStdin = _fdopen(fdStdin, \"r\");\n"
+            "        *stdin = *fpStdin;\n"
+            "        setvbuf(stdin, NULL, _IONBF, 0);\n"
+            "    }\n"
+            "\n"
+            "    // call the actual program\n"
+            "    int result = ProgramMain();\n"
+            "\n"
+            "    // keep console open for a moment to see output\n"
+            "    std::cout << \"\\nPress Enter to exit...\";\n"
+            "    std::cin.get();\n"
+            "\n"
+            "    return result;\n"
+            "}\n";
+
+        std::string wrapperFile = "console_wrapper.cpp";
+        std::ofstream outFile(wrapperFile);
+        if (!outFile) {
+            std::cerr << "Error: Could not create console wrapper file" << std::endl;
+            std::remove(objFilename.c_str());
+            return false;
+        }
+        outFile << wrapperSource;
+        outFile.close();
+
+        std::string wrapperObj = "console_wrapper.o";
+        std::string compileWrapperCmd = "g++ -c \"" + wrapperFile + "\" -o \"" + wrapperObj + "\"";
+        if (verbose) std::cerr << "Compiling wrapper: " << compileWrapperCmd << std::endl;
+        int compileResult = std::system(compileWrapperCmd.c_str());
+        
+        if (compileResult != 0) {
+            std::cerr << "Error: Failed to compile console wrapper" << std::endl;
+            std::remove(wrapperFile.c_str());
+            std::remove(objFilename.c_str());
+            return false;
         }
 
         if (useStdlib) {
-            linkCmd = "clang++ -target " + triple + " -o \"" + exeName + "\" \"" + objFilename + "\" \"" + stdlibPath + "\"";
-            if (!dllPath.empty()) {
-                std::filesystem::path dllDir = std::filesystem::path(dllPath).parent_path();
-                linkCmd += " -L\"" + dllDir.string() + "\"";
-            }
+            linkCmd = "g++ -mconsole -o \"" + exeName + "\" \"" + objFilename + "\" \"" + wrapperObj + "\" \"" + stdlibPath + "\"";
         } else {
-            linkCmd = "clang++ -target " + triple + " -o \"" + exeName + "\" \"" + objFilename + "\"";
+            linkCmd = "g++ -mconsole -o \"" + exeName + "\" \"" + objFilename + "\" \"" + wrapperObj + "\"";
         }
-        if (verbose) linkCmd += " -v";
+
+        if (!dllPath.empty()) {
+            std::filesystem::path dllDir = std::filesystem::path(dllPath).parent_path();
+            linkCmd += " -L\"" + dllDir.string() + "\"";
+        }
+
+        linkCmd += " -luser32 -lkernel32 -lgdi32 -ladvapi32";
 
         if (verbose) {
             std::cerr << "Linking command: " << linkCmd << std::endl;
@@ -537,38 +548,43 @@ bool CodeGen::compileToExecutable(const std::string& outputFilename, bool verbos
 
         result = std::system(linkCmd.c_str());
 
+        std::remove(wrapperFile.c_str());
+        std::remove(wrapperObj.c_str());
+
         if (result == 0 && !dllPath.empty()) {
             std::filesystem::path exeDir = std::filesystem::path(exeName).parent_path();
             std::filesystem::path targetDll = exeDir / std::filesystem::path(dllPath).filename();
-            try {
-                if (!std::filesystem::exists(targetDll)) {
-                    std::filesystem::copy_file(dllPath, targetDll, std::filesystem::copy_options::overwrite_existing);
-                }
-                if (verbose) {
-                    std::cerr << "Copied DLL to: " << targetDll << std::endl;
-                }
-            } catch (const std::exception& e) {
-                std::cerr << "Warning: Failed to copy DLL: " << e.what() << std::endl;
+            try { 
+                if (!std::filesystem::exists(targetDll)) 
+                    std::filesystem::copy_file(dllPath, targetDll, std::filesystem::copy_options::overwrite_existing); 
+            } catch (...) { 
+                if (verbose) std::cerr << "Warning: Failed to copy DLL\n"; 
             }
         }
-    } else {
+
+        if (result == 0) {
+            std::cout << "Successfully created Windows console executable: " << exeName << std::endl;
+            std::cout << "This executable will open a console window when run." << std::endl;
+        }
+
+    } else { 
         if (useStdlib) {
-            linkCmd = "clang++ -target " + triple + " -o \"" + outputFilename + "\" \"" + objFilename + "\" \"" + stdlibPath + "\"";
+            linkCmd = "clang++ -o \"" + outputFilename + "\" \"" + objFilename + "\" \"" + stdlibPath + "\"";
             if (!dllPath.empty()) {
                 std::filesystem::path libDir = std::filesystem::path(dllPath).parent_path();
                 linkCmd += " -Wl,-rpath," + libDir.string();
             }
         } else {
-            linkCmd = "clang++ -target " + triple + " -o \"" + outputFilename + "\" \"" + objFilename + "\"";
+            linkCmd = "clang++ -o \"" + outputFilename + "\" \"" + objFilename + "\"";
         }
-
+        
         if (verbose) linkCmd += " -v";
-
-        if (verbose) {
-            std::cerr << "Linking command: " << linkCmd << std::endl;
-        }
-
+        if (verbose) std::cerr << "Linking command: " << linkCmd << std::endl;
         result = std::system(linkCmd.c_str());
+
+        if (result == 0) {
+            std::cout << "Successfully created executable: " << outputFilename << std::endl;
+        }
     }
 
     std::remove(objFilename.c_str());
@@ -580,7 +596,6 @@ bool CodeGen::compileToExecutable(const std::string& outputFilename, bool verbos
 
     return true;
 }
-
 const std::vector<std::pair<std::string, AST::VarType>>& CodeGen::getStructFields(const std::string& structName) const {
     static std::vector<std::pair<std::string, AST::VarType>> empty;
     

@@ -57,6 +57,10 @@ struct Vector3
     func to_str() -> str
         ret "(" + (self.x as str) + ", " + (self.y as str) + ", " + (self.z as str) + ")";
     end
+
+    func do_somet()
+        out.println("hi");
+    end 
 end
 
 func main() -> uint0
@@ -85,6 +89,8 @@ func main() -> uint0
 
     var cross_val: Vector3 = a.cross(b);
     out.println("Cross(a, b) = " + (cross_val as str));
+
+    a.do_somet();
 
     ret 0;
 end
