@@ -398,6 +398,8 @@ bool CodeGen::compileToExecutable(const std::string& outputFilename, bool verbos
     bool isWindows = (triple.find("windows") != std::string::npos ||
                       triple.find("mingw") != std::string::npos ||
                       triple.find("win32") != std::string::npos);
+    bool isLinux = (triple.find("linux") != std::string::npos);
+    bool isMac = (triple.find("darwin") != std::string::npos || triple.find("apple") != std::string::npos);
 
     std::string stdlibPath, dllPath;
     bool useStdlib = !noStdlib;
@@ -436,13 +438,49 @@ bool CodeGen::compileToExecutable(const std::string& outputFilename, bool verbos
                 if (ext == ".dll" || ext == ".so" || ext == ".dylib") dllPath = envLib;
             }
         }
+        
+        if (stdlibPath.empty()) {
+            std::vector<std::string> searchPaths = {
+                "./lib",
+                "/usr/local/lib",
+                "/usr/lib",
+                "/lib"
+            };
+            
+            std::vector<std::string> libNames;
+            if (isWindows) {
+                libNames = {"libsummit.lib", "libsummit.a"};
+            } else if (isLinux) {
+                libNames = {"libsummit.so", "libsummit.a"};
+            } else if (isMac) {
+                libNames = {"libsummit.dylib", "libsummit.a"};
+            } else {
+                libNames = {"libsummit.a", "libsummit.so", "libsummit.dylib"};
+            }
+            
+            for (const auto& searchPath : searchPaths) {
+                for (const auto& libName : libNames) {
+                    std::filesystem::path fullPath = std::filesystem::path(searchPath) / libName;
+                    if (std::filesystem::exists(fullPath)) {
+                        stdlibPath = fullPath.string();
+                        std::string ext = fullPath.extension().string();
+                        if (ext == ".so" || ext == ".dylib") dllPath = stdlibPath;
+                        break;
+                    }
+                }
+                if (!stdlibPath.empty()) break;
+            }
+        }
+        
         if (stdlibPath.empty()) {
             std::cerr << "Warning: Standard library not found.\n";
+            std::cerr << "Set SUMMIT_LIB to point to the library directory or specific library file.\n";
+            std::cerr << "Searched in: ./lib/, /usr/local/lib/, /usr/lib/, /lib/\n";
             return false;
         }
         if (verbose) { 
             std::cerr << "Using standard library: " << stdlibPath << std::endl; 
-            if (!dllPath.empty()) std::cerr << "Shared DLL: " << dllPath << std::endl; 
+            if (!dllPath.empty()) std::cerr << "Shared library: " << dllPath << std::endl; 
         }
     }
 
@@ -569,13 +607,37 @@ bool CodeGen::compileToExecutable(const std::string& outputFilename, bool verbos
 
     } else { 
         if (useStdlib) {
-            linkCmd = "clang++ -o \"" + outputFilename + "\" \"" + objFilename + "\" \"" + stdlibPath + "\"";
+            std::filesystem::path libPath(stdlibPath);
+            std::string libDir = libPath.parent_path().string();
+            std::string libName = libPath.filename().string();
+            
+            std::string baseLibName = libName;
+            if (baseLibName.find("lib") == 0) {
+                baseLibName = baseLibName.substr(3);
+            }
+            size_t dotPos = baseLibName.find_last_of('.');
+            if (dotPos != std::string::npos) {
+                baseLibName = baseLibName.substr(0, dotPos);
+            }
+            
+            linkCmd = "clang++ -o \"" + outputFilename + "\" \"" + objFilename + "\"";
+            linkCmd += " -L\"" + libDir + "\"";
+            linkCmd += " -l" + baseLibName;
+            
             if (!dllPath.empty()) {
-                std::filesystem::path libDir = std::filesystem::path(dllPath).parent_path();
-                linkCmd += " -Wl,-rpath," + libDir.string();
+                linkCmd += " -Wl,-rpath,\"" + libDir + "\"";
+            }
+            
+            if (isLinux) {
+                linkCmd += " -lm -ldl -lpthread";
+            } else if (isMac) {
+                linkCmd += " -framework Foundation";
             }
         } else {
             linkCmd = "clang++ -o \"" + outputFilename + "\" \"" + objFilename + "\"";
+            if (isLinux) {
+                linkCmd += " -lm -ldl -lpthread";
+            }
         }
         
         if (verbose) linkCmd += " -v";
@@ -596,6 +658,7 @@ bool CodeGen::compileToExecutable(const std::string& outputFilename, bool verbos
 
     return true;
 }
+
 const std::vector<std::pair<std::string, AST::VarType>>& CodeGen::getStructFields(const std::string& structName) const {
     static std::vector<std::pair<std::string, AST::VarType>> empty;
     
