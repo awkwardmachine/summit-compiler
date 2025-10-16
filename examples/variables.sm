@@ -9,7 +9,11 @@ struct Person
     height: float64;
 
     func greet()
-        out.println("My name is " + self.name + " and I am " + (self.age as str) + " years old!");
+        if (self.age == 25) then
+            out.println("You also meet this criteria");
+        end
+        out.println("My name is " + self.name + " and I am " 
+            + (self.age as str) + " years old!");
     end
 end
 

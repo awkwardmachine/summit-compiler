@@ -1,3 +1,4 @@
+#!/usr/bin/env bash
 set -euo pipefail
 
 if [[ -z "${MSYSTEM:-}" ]]; then
@@ -34,9 +35,11 @@ CXXFLAGS="-std=c++17 -O2 \
 -Isrc -Iinclude -Iinclude/codegen -Iinclude/ast -Iinclude/utils -Iinclude/lexer -Iinclude/parser \
 -I/ucrt64/include \
 $LLVM_CXXFLAGS \
--fmerge-all-constants -fno-stack-protector -fno-math-errno -fno-ident -w"
+-fmerge-all-constants -fno-stack-protector -fno-math-errno -fno-ident -w \
+-D__USE_MINGW_ANSI_STDIO=1"
 
-LDFLAGS="$LLVM_LDFLAGS -ltommath -lstdc++ -Wl,--gc-sections,--as-needed,--strip-all,-s"
+LDFLAGS="$LLVM_LDFLAGS -ltommath -lstdc++ -lstdc++fs -Wl,--gc-sections,--as-needed,--strip-all,-s"
+
 
 run() { echo "+ $*"; "$@"; }
 
@@ -44,24 +47,37 @@ build() {
     run mkdir -p "$BIN_DIR"
     echo "Starting compilation..."
     START_TIME=$(date +%s)
-    
-    while IFS= read -r -d '' src; do
+
+    mapfile -d '' SRCS < <(find "$SRC_DIR" -name '*.cpp' -print0)
+    JOBS=$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)
+    echo "Detected $JOBS CPU cores. Compiling in parallel..."
+
+    export SRC_DIR BUILD_DIR CXX CXXFLAGS
+
+    for src in "${SRCS[@]}"; do
         obj="$BUILD_DIR/${src#$SRC_DIR/}"
         obj="${obj%.cpp}.o"
-        run mkdir -p "$(dirname "$obj")"
+        mkdir -p "$(dirname "$obj")"
+    done
+
+    printf "%s\0" "${SRCS[@]}" | \
+    xargs -0 -n1 -P"$JOBS" bash -c '
+        src="$0"
+        obj="$BUILD_DIR/${src#$SRC_DIR/}"
+        obj="${obj%.cpp}.o"
         echo "Compiling $src -> $obj"
-        run "$CXX" $CXXFLAGS -c "$src" -o "$obj"
-    done < <(find "$SRC_DIR" -name '*.cpp' -print0)
-    
+        "$CXX" $CXXFLAGS -c "$src" -o "$obj"
+    '
+
     OBJS=$(find "$BUILD_DIR" -name '*.o')
     if [[ -z "$OBJS" ]]; then
         echo "No object files found to link."
         exit 1
     fi
-    
+
     echo "Linking..."
     run "$CXX" $OBJS $LDFLAGS -o "$TARGET"
-    
+
     if command -v strip >/dev/null 2>&1; then
         run strip --strip-all "$TARGET" 2>/dev/null || true
     fi
@@ -69,13 +85,6 @@ build() {
         run upx --lzma --no-progress "$TARGET" >/dev/null 2>&1 || true
     fi
 
-    echo "Copying required DLLs..."
-    for dll in libgcc_s_seh-1.dll libstdc++-6.dll libwinpthread-1.dll libLLVM-20.dll; do
-        if [ -f "/ucrt64/bin/$dll" ]; then
-            cp "/ucrt64/bin/$dll" "$BIN_DIR/" 2>/dev/null || true
-        fi
-    done
-    
     END_TIME=$(date +%s)
     echo "Done: $TARGET"
     echo "Compilation time: $((END_TIME - START_TIME))s"
@@ -83,7 +92,7 @@ build() {
 
 clean() {
     run rm -rf "$BUILD_DIR"
-    echo "🧹 Cleaned build directory."
+    echo "Cleaned build directory."
 }
 
 case "${1:-build}" in

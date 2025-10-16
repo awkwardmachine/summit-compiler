@@ -14,6 +14,7 @@
 #include <system_error>
 #include <cstdlib>
 #include <fstream>
+#include <filesystem>
 
 /* Using LLVM and AST namespaces */
 using namespace llvm;
@@ -72,14 +73,11 @@ llvm::Type* CodeGen::getLLVMType(AST::VarType type, const std::string& structNam
 }
 /* Enter a new scope */
 void CodeGen::enterScope() {
-    // Create new scope but copy globals from ALL previous scopes
     std::unordered_map<std::string, llvm::Value*> newNamedValues;
     std::unordered_map<std::string, AST::VarType> newVariableTypes;
     std::unordered_set<std::string> newConstVariables;
     
-    // Always copy ALL global variables to every new scope
     for (const auto& globalName : globalVariables) {
-        // Try to find the global variable in any existing scope
         for (auto it = namedValuesStack.rbegin(); it != namedValuesStack.rend(); ++it) {
             auto found = it->find(globalName);
             if (found != it->end()) {
@@ -88,7 +86,6 @@ void CodeGen::enterScope() {
             }
         }
         
-        // Try to find the type in any existing scope
         for (auto it = variableTypesStack.rbegin(); it != variableTypesStack.rend(); ++it) {
             auto found = it->find(globalName);
             if (found != it->end()) {
@@ -96,8 +93,7 @@ void CodeGen::enterScope() {
                 break;
             }
         }
-        
-        // Check if it's const in any existing scope
+
         for (auto it = constVariablesStack.rbegin(); it != constVariablesStack.rend(); ++it) {
             if (it->find(globalName) != it->end()) {
                 newConstVariables.insert(globalName);
@@ -118,7 +114,6 @@ void CodeGen::enterScope() {
               << " total variables" << std::endl;
 }
 
-/* Exit current scope */
 /* Exit current scope */
 void CodeGen::exitScope() {
     if (!namedValuesStack.empty()) {
@@ -175,7 +170,6 @@ void CodeGen::registerStructType(const std::string& name, llvm::StructType* type
                                 const std::vector<std::pair<std::string, AST::VarType>>& fields) {
     structTypes[name] = type;
     
-    // Track field indices
     auto& fieldMap = structFieldIndices[name];
     for (size_t i = 0; i < fields.size(); i++) {
         fieldMap[fields[i].first] = i;
@@ -197,15 +191,12 @@ int CodeGen::getStructFieldIndex(const std::string& structName, const std::strin
 }
 
 llvm::Type* CodeGen::getStructType(const std::string& name) {
-    // First, check if we've already created this struct type
     auto it = structTypes.find(name);
     if (it != structTypes.end()) {
         return it->second;
     }
     
-    // If not found, create a placeholder opaque struct
-    // The actual definition will be filled in when the struct is defined
-    llvm::StructType* structType = llvm::StructType::create(getContext(), name);  // FIXED: use getContext()
+    llvm::StructType* structType = llvm::StructType::create(getContext(), name);
     structTypes[name] = structType;
     return structType;
 }
@@ -363,7 +354,7 @@ bool CodeGen::compileToExecutable(const std::string& outputFilename, bool verbos
         triple = "x86_64-pc-linux-gnu";
 #endif
     }
-    
+
     llvmModule->setTargetTriple(triple);
 
     if (verbose) {
@@ -412,50 +403,173 @@ bool CodeGen::compileToExecutable(const std::string& outputFilename, bool verbos
         std::cerr << "Generated object file: " << objFilename << std::endl;
     }
 
-    std::string stdlibPath = "lib/libsummit.a";
+    bool isWindows = (triple.find("windows") != std::string::npos ||
+                      triple.find("mingw") != std::string::npos ||
+                      triple.find("win32") != std::string::npos);
+
+    std::string stdlibPath;
+    std::string dllPath;
     bool useStdlib = !noStdlib;
-    
+
     if (useStdlib) {
-        std::ifstream stdlibCheck(stdlibPath);
-        if (!stdlibCheck.good()) {
-            std::cerr << "Warning: Standard library not found at " << stdlibPath << std::endl;
-            std::cerr << "Run ./build_stdlib.sh to build the standard library" << std::endl;
-            std::cerr << "Or use --no-stdlib to compile without standard library" << std::endl;
+        const char* envLib = std::getenv("SUMMIT_LIB");
+        
+        if (envLib) {
+            std::filesystem::path libPath(envLib);
+            
+            if (std::filesystem::is_directory(libPath)) {
+                if (isWindows) {
+                    std::vector<std::string> winLibNames = {"summit.lib", "libsummit.a"};
+                    for (const auto& libName : winLibNames) {
+                        std::filesystem::path fullPath = libPath / libName;
+                        if (std::filesystem::exists(fullPath)) {
+                            stdlibPath = fullPath.string();
+                            break;
+                        }
+                    }
+                    
+                    std::vector<std::string> winDllNames = {"summit.dll", "libsummit.dll"};
+                    for (const auto& dllName : winDllNames) {
+                        std::filesystem::path fullDllPath = libPath / dllName;
+                        if (std::filesystem::exists(fullDllPath)) {
+                            dllPath = fullDllPath.string();
+                            break;
+                        }
+                    }
+                } else {
+                    std::vector<std::string> unixLibNames = {"libsummit.a", "libsummit.so", "libsummit.dylib"};
+                    for (const auto& libName : unixLibNames) {
+                        std::filesystem::path fullPath = libPath / libName;
+                        if (std::filesystem::exists(fullPath)) {
+                            stdlibPath = fullPath.string();
+                            if (libName.find(".so") != std::string::npos || 
+                                libName.find(".dylib") != std::string::npos) {
+                                dllPath = stdlibPath;
+                            }
+                            break;
+                        }
+                    }
+                }
+            } else if (std::filesystem::exists(libPath)) {
+                stdlibPath = envLib;
+                
+                std::string ext = libPath.extension().string();
+                if (ext == ".dll" || ext == ".so" || ext == ".dylib") {
+                    dllPath = envLib;
+                }
+            }
+        }
+
+        if (stdlibPath.empty()) {
+            if (isWindows) {
+                std::vector<std::string> winLibNames = {"summit.lib", "libsummit.a"};
+                for (const auto& libName : winLibNames) {
+                    std::filesystem::path fullPath = "lib" / std::filesystem::path(libName);
+                    if (std::filesystem::exists(fullPath)) {
+                        stdlibPath = fullPath.string();
+                        break;
+                    }
+                }
+                
+                std::vector<std::string> winDllNames = {"summit.dll", "libsummit.dll"};
+                for (const auto& dllName : winDllNames) {
+                    std::filesystem::path fullDllPath = "lib" / std::filesystem::path(dllName);
+                    if (std::filesystem::exists(fullDllPath)) {
+                        dllPath = fullDllPath.string();
+                        break;
+                    }
+                }
+            } else {
+                std::vector<std::string> unixLibNames = {"libsummit.a", "libsummit.so", "libsummit.dylib"};
+                for (const auto& libName : unixLibNames) {
+                    std::filesystem::path fullPath = "lib" / std::filesystem::path(libName);
+                    if (std::filesystem::exists(fullPath)) {
+                        stdlibPath = fullPath.string();
+                        if (libName.find(".so") != std::string::npos || 
+                            libName.find(".dylib") != std::string::npos) {
+                            dllPath = stdlibPath;
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+
+        if (stdlibPath.empty()) {
+            std::cerr << "Warning: Standard library not found.\n";
+            std::cerr << "Set SUMMIT_LIB to point to the library directory or specific library file.\n";
+            std::cerr << "Alternatively, place the library in ./lib/\n";
+            std::cerr << "Run ./build_stdlib.sh to build it.\n";
             return false;
+        }
+
+        if (verbose) {
+            std::cerr << "Using standard library: " << stdlibPath << std::endl;
+            if (!dllPath.empty())
+                std::cerr << "Using shared library (runtime): " << dllPath << std::endl;
         }
     }
 
     std::string linkCmd;
-    bool isWindows = (triple.find("windows") != std::string::npos || 
-                     triple.find("mingw") != std::string::npos ||
-                     triple.find("win32") != std::string::npos);
-    
+    int result = 0;
+
     if (isWindows) {
         std::string exeName = outputFilename;
         if (exeName.length() < 4 || exeName.substr(exeName.length() - 4) != ".exe") {
             exeName += ".exe";
         }
+
         if (useStdlib) {
-            linkCmd = "clang++ -target " + triple + " -o " + exeName + " " + objFilename + " " + stdlibPath;
+            linkCmd = "clang++ -target " + triple + " -o \"" + exeName + "\" \"" + objFilename + "\" \"" + stdlibPath + "\"";
+            if (!dllPath.empty()) {
+                std::filesystem::path dllDir = std::filesystem::path(dllPath).parent_path();
+                linkCmd += " -L\"" + dllDir.string() + "\"";
+            }
         } else {
-            linkCmd = "clang++ -target " + triple + " -o " + exeName + " " + objFilename;
+            linkCmd = "clang++ -target " + triple + " -o \"" + exeName + "\" \"" + objFilename + "\"";
         }
         if (verbose) linkCmd += " -v";
+
+        if (verbose) {
+            std::cerr << "Linking command: " << linkCmd << std::endl;
+        }
+
+        result = std::system(linkCmd.c_str());
+        
+        if (result == 0 && !dllPath.empty()) {
+            std::filesystem::path exeDir = std::filesystem::path(exeName).parent_path();
+            std::filesystem::path targetDll = exeDir / std::filesystem::path(dllPath).filename();
+            try {
+                if (!std::filesystem::exists(targetDll)) {
+                    std::filesystem::copy_file(dllPath, targetDll, std::filesystem::copy_options::overwrite_existing);
+                }
+                if (verbose) {
+                    std::cerr << "Copied DLL to: " << targetDll << std::endl;
+                }
+            } catch (const std::exception& e) {
+                std::cerr << "Warning: Failed to copy DLL: " << e.what() << std::endl;
+            }
+        }
     } else {
         if (useStdlib) {
-            linkCmd = "clang++ -target " + triple + " -o " + outputFilename + " " + objFilename + " " + stdlibPath;
+            linkCmd = "clang++ -target " + triple + " -o \"" + outputFilename + "\" \"" + objFilename + "\" \"" + stdlibPath + "\"";
+            if (!dllPath.empty()) {
+                std::filesystem::path libDir = std::filesystem::path(dllPath).parent_path();
+                linkCmd += " -Wl,-rpath," + libDir.string();
+            }
         } else {
-            linkCmd = "clang++ -target " + triple + " -o " + outputFilename + " " + objFilename;
+            linkCmd = "clang++ -target " + triple + " -o \"" + outputFilename + "\" \"" + objFilename + "\"";
         }
+
         if (verbose) linkCmd += " -v";
+
+        if (verbose) {
+            std::cerr << "Linking command: " << linkCmd << std::endl;
+        }
+
+        result = std::system(linkCmd.c_str());
     }
 
-    if (verbose) {
-        std::cerr << "Linking command: " << linkCmd << std::endl;
-    }
-
-    int result = std::system(linkCmd.c_str());
-    
     std::remove(objFilename.c_str());
 
     if (result != 0) {
