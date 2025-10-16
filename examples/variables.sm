@@ -1,31 +1,90 @@
 const lib = @import("std");
 const out = lib.io;
 
-var x: int8 = 5;
+struct Vector3
+    x: float64 = 0.0;
+    y: float64 = 0.0;
+    z: float64 = 0.0;
 
-struct Person
-    name: str;
-    age: int32;
-    height: float64;
+    func length() -> float64
+        ret lib.math.sqrt(self.x*self.x + self.y*self.y + self.z*self.z);
+    end
 
-    func greet()
-        if (self.age == 25) then
-            out.println("You also meet this criteria");
+    func normalize() -> Vector3
+        var len: float64 = self.length();
+        if (len == 0.0) then
+            ret Vector3{x: 0.0, y: 0.0, z: 0.0};
         end
-        out.println("My name is " + self.name + " and I am " 
-            + (self.age as str) + " years old!");
+        ret Vector3{x: self.x / len, y: self.y / len, z: self.z / len};
+    end
+
+    func add(other: Vector3) -> Vector3
+        ret Vector3{
+            x: self.x + other.x,
+            y: self.y + other.y,
+            z: self.z + other.z
+        };
+    end
+
+    func sub(other: Vector3) -> Vector3
+        ret Vector3{
+            x: self.x - other.x,
+            y: self.y - other.y,
+            z: self.z - other.z
+        };
+    end
+
+    func mul(scalar: float64) -> Vector3
+        ret Vector3{
+            x: self.x * scalar,
+            y: self.y * scalar,
+            z: self.z * scalar
+        };
+    end
+
+    func dot(other: Vector3) -> float64
+        ret self.x*other.x + self.y*other.y + self.z*other.z;
+    end
+
+    func cross(other: Vector3) -> Vector3
+        ret Vector3{
+            x: self.y*other.z - self.z*other.y,
+            y: self.z*other.x - self.x*other.z,
+            z: self.x*other.y - self.y*other.x
+        };
+    end
+
+    func to_str() -> str
+        ret "(" + (self.x as str) + ", " + (self.y as str) + ", " + (self.z as str) + ")";
     end
 end
 
 func main() -> uint0
-    var john: Person = Person{name: "John Doe", age: 30, height: 1.75};
-    const mary: Person = Person{name: "Mary Smith", age: 25, height: 1.65};
+    var a: Vector3 = Vector3{x: 3.0, y: 4.0, z: 0.0};
+    var b: Vector3 = Vector3{x: 1.0, y: 2.0, z: 3.0};
 
-    out.println(mary.name);
-    out.println(mary.age);
-    out.println(mary.height);
+    out.println("Vector a = " + (a as str));
+    out.println("Vector b = " + (b as str));
 
-    mary.greet();
+    out.println("Length of a = " + (a.length() as str));
+
+    var norm: Vector3 = a.normalize();
+    out.println("Normalized a = " + (norm as str));
+
+    var sum: Vector3 = a.add(b);
+    out.println("a + b = " + (sum as str));
+
+    var diff: Vector3 = a.sub(b);
+    out.println("a - b = " + (diff as str));
+
+    var scaled: Vector3 = a.mul(2.0);
+    out.println("a * 2 = " + (scaled as str));
+
+    var dot_val: float64 = a.dot(b);
+    out.println("Dot(a, b) = " + (dot_val as str));
+
+    var cross_val: Vector3 = a.cross(b);
+    out.println("Cross(a, b) = " + (cross_val as str));
 
     ret 0;
 end

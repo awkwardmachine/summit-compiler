@@ -1,4 +1,6 @@
 #include "parser.h"
+#include <vector>
+#include "ast_types.h"
 
 using namespace std;
 using namespace AST;
@@ -302,7 +304,6 @@ unique_ptr<Stmt> Parser::parseElseIfChain() {
     
     return make_unique<IfStmt>(move(condition), move(thenBlock), move(elseBranch));
 }
-
 unique_ptr<Stmt> Parser::parseFunctionDeclaration() {
     bool isEntryPoint = false;
     if (check(TokenType::ENTRYPOINT)) {
@@ -332,9 +333,23 @@ unique_ptr<Stmt> Parser::parseFunctionDeclaration() {
     if (!match(TokenType::RPAREN)) error("Expected ')' after parameters");
     
     VarType returnType = VarType::VOID;
+    std::string returnStructName = "";
+    
     if (match(TokenType::MINUS)) {
         if (!match(TokenType::GREATER)) error("Expected '>' after '-' for return type");
-        returnType = parseType();
+        
+        if (check(TokenType::IDENTIFIER)) {
+            string typeName = peek().value;
+            if (isStructType(typeName)) {
+                returnType = VarType::STRUCT;
+                returnStructName = typeName;
+                advance();
+            } else {
+                returnType = parseType();
+            }
+        } else {
+            returnType = parseType();
+        }
     }
 
     auto body = make_unique<BlockStmt>();
@@ -348,7 +363,7 @@ unique_ptr<Stmt> Parser::parseFunctionDeclaration() {
     
     exitScope();
     
-    return make_unique<FunctionStmt>(name, move(parameters), returnType, move(body), isEntryPoint);
+    return make_unique<FunctionStmt>(name, move(parameters), returnType, move(body), isEntryPoint, returnStructName);
 }
 
 unique_ptr<Stmt> Parser::parseReturnStatement() {
@@ -495,7 +510,6 @@ unique_ptr<Stmt> Parser::parseForLoopStatement() {
     return make_unique<ForLoopStmt>(varName, varType, move(initializer),
                                     move(condition), move(increment), move(body));
 }
-
 unique_ptr<Stmt> Parser::parseStructDeclaration() {
     if (!match(TokenType::STRUCT)) error("Expected 'struct'");
     if (!match(TokenType::IDENTIFIER)) error("Expected struct name");
@@ -506,6 +520,8 @@ unique_ptr<Stmt> Parser::parseStructDeclaration() {
     vector<pair<string, VarType>> fields;
     vector<unique_ptr<FunctionStmt>> methods;
     
+    unordered_map<string, unique_ptr<Expr>> fieldDefaults;
+    
     while (!check(TokenType::END) && !isAtEnd()) {
         if (check(TokenType::IDENTIFIER) && checkNext(TokenType::COLON)) {
             string fieldName = peek().value;
@@ -513,7 +529,13 @@ unique_ptr<Stmt> Parser::parseStructDeclaration() {
             advance();
             
             VarType fieldType = parseType();
+            
             fields.emplace_back(fieldName, fieldType);
+
+            if (match(TokenType::EQUALS)) {
+                auto defaultValue = parseExpression();
+                fieldDefaults[fieldName] = std::move(defaultValue);
+            }
             
             if (!match(TokenType::SEMICOLON)) {
                 error("Expected ';' after field declaration");
@@ -532,13 +554,18 @@ unique_ptr<Stmt> Parser::parseStructDeclaration() {
         error("Expected 'end' after struct definition");
     }
     
-    return make_unique<StructDecl>(name, move(fields), move(methods));
+    auto structDecl = make_unique<StructDecl>(name, move(fields), move(methods));
+    
+    for (auto& [fieldName, defaultValue] : fieldDefaults) {
+        structDecl->addFieldDefault(fieldName, std::move(defaultValue));
+    }
+    
+    return structDecl;
 }
-
 unique_ptr<FunctionStmt> Parser::parseMethodDeclaration(const string& structName) {
     if (!match(TokenType::FUNC)) error("Expected 'func'");
     if (!match(TokenType::IDENTIFIER)) error("Expected method name");
-    string name = tokens[current - 1].value;
+    string methodName = tokens[current - 1].value;
 
     enterScope();
     
@@ -561,9 +588,31 @@ unique_ptr<FunctionStmt> Parser::parseMethodDeclaration(const string& structName
     if (!match(TokenType::RPAREN)) error("Expected ')' after parameters");
     
     VarType returnType = VarType::VOID;
+    std::string returnStructName = "";
+    
     if (match(TokenType::MINUS)) {
         if (!match(TokenType::GREATER)) error("Expected '>' after '-' for return type");
-        returnType = parseType();
+        
+        if (check(TokenType::IDENTIFIER)) {
+            string typeName = peek().value;
+            std::cout << "DEBUG parseMethodDeclaration: Found return type identifier: '" << typeName << "'" << std::endl;
+            std::cout << "DEBUG parseMethodDeclaration: Is struct type? " << isStructType(typeName) << std::endl;
+            
+            if (isStructType(typeName)) {
+                returnType = VarType::STRUCT;
+                returnStructName = typeName;
+                advance();
+                std::cout << "DEBUG parseMethodDeclaration: Set return type to STRUCT with name: '" << returnStructName << "'" << std::endl;
+            } else {
+                returnType = parseType();
+                std::cout << "DEBUG parseMethodDeclaration: Set return type to: " << static_cast<int>(returnType) << std::endl;
+            }
+        } else {
+            returnType = parseType();
+            std::cout << "DEBUG parseMethodDeclaration: Set return type to: " << static_cast<int>(returnType) << std::endl;
+        }
+    } else {
+        std::cout << "DEBUG parseMethodDeclaration: No return type specified, defaulting to VOID" << std::endl;
     }
 
     auto body = make_unique<BlockStmt>();
@@ -576,12 +625,17 @@ unique_ptr<FunctionStmt> Parser::parseMethodDeclaration(const string& structName
     }
     
     exitScope();
+
+    std::string fullMethodName = structName + "." + methodName;
     
-    auto method = make_unique<FunctionStmt>(name, move(parameters), returnType, move(body), false);
+    std::cout << "DEBUG parseMethodDeclaration: Creating method '" << fullMethodName 
+              << "' with return type " << static_cast<int>(returnType)
+              << " and return struct name '" << returnStructName << "'" << std::endl;
+    
+    auto method = make_unique<FunctionStmt>(fullMethodName, std::move(parameters), returnType, std::move(body), false, returnStructName);
     
     return method;
 }
-
 unique_ptr<Stmt> Parser::parseStatement() {
     if (check(TokenType::ENTRYPOINT)) {
         return parseEntrypointStatement();

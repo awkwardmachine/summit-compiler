@@ -1037,21 +1037,63 @@ llvm::Value* StatementCodeGen::codegenProgram(CodeGen& context, Program& program
         }
     }
 }
+
 llvm::Value* StatementCodeGen::codegenFunctionStmt(CodeGen& context, FunctionStmt& stmt) {
     auto& module = context.getModule();
     auto& llvmContext = context.getContext();
     auto& builder = context.getBuilder();
     
     std::vector<Type*> paramTypes;
+
+    bool isMethod = (stmt.getName().find('.') != std::string::npos);
+    bool firstParamIsSelf = !stmt.getParameters().empty() && stmt.getParameters()[0].first == "self";
+    
     for (const auto& param : stmt.getParameters()) {
-        auto paramType = context.getLLVMType(param.second);
+        llvm::Type* paramType = nullptr;
+        if (param.second == VarType::STRUCT) {
+            std::string structName = param.first == "self" && isMethod 
+                ? stmt.getName().substr(0, stmt.getName().find('.'))
+                : context.getVariableStructName(param.first);
+            
+            if (!structName.empty()) {
+                paramType = llvm::PointerType::get(context.getStructType(structName), 0);
+            } else {
+                paramType = llvm::PointerType::get(llvm::Type::getInt8Ty(llvmContext), 0);
+            }
+        } else {
+            paramType = context.getLLVMType(param.second);
+        }
         if (!paramType) {
             throw std::runtime_error("Unknown parameter type for: " + param.first);
         }
         paramTypes.push_back(paramType);
     }
+
+    llvm::Type* returnType = nullptr;
+    if (stmt.getReturnType() == VarType::STRUCT) {
+        std::string returnStructName = stmt.getReturnStructName();
+        std::cout << "DEBUG: Function '" << stmt.getName() << "' returns struct: '" << returnStructName << "'" << std::endl;
+        
+        if (returnStructName.empty()) {
+            if (stmt.getName().find('.') != std::string::npos) {
+                size_t dotPos = stmt.getName().find('.');
+                returnStructName = stmt.getName().substr(0, dotPos);
+                std::cout << "DEBUG: Inferred struct name from method: " << returnStructName << std::endl;
+            }
+        }
+        
+        if (!returnStructName.empty()) {
+            returnType = context.getStructType(returnStructName);
+            if (!returnType) {
+                throw std::runtime_error("Unknown struct return type: " + returnStructName);
+            }
+        } else {
+            throw std::runtime_error("Struct return type requires a struct name for function: " + stmt.getName());
+        }
+    } else {
+        returnType = context.getLLVMType(stmt.getReturnType());
+    }
     
-    auto returnType = context.getLLVMType(stmt.getReturnType());
     if (!returnType) {
         throw std::runtime_error("Unknown return type for function: " + stmt.getName());
     }
@@ -1078,11 +1120,29 @@ llvm::Value* StatementCodeGen::codegenFunctionStmt(CodeGen& context, FunctionStm
             const auto& param = stmt.getParameters()[idx];
             arg.setName(param.first);
             
-            auto alloca = builder.CreateAlloca(arg.getType(), nullptr, param.first);
-            builder.CreateStore(&arg, alloca);
-            
-            context.getNamedValues()[param.first] = alloca;
-            context.getVariableTypes()[param.first] = param.second;
+            if (param.first == "self" && isMethod) {
+                context.getNamedValues()[param.first] = &arg;
+                context.getVariableTypes()[param.first] = param.second;
+
+                if (param.second == VarType::STRUCT) {
+                    std::string structName = stmt.getName().substr(0, stmt.getName().find('.'));
+                    context.setVariableStructName(param.first, structName);
+                    std::cout << "DEBUG: Set 'self' parameter to struct '" << structName << "' without alloca" << std::endl;
+                }
+            } else {
+                auto alloca = builder.CreateAlloca(arg.getType(), nullptr, param.first);
+                builder.CreateStore(&arg, alloca);
+                
+                context.getNamedValues()[param.first] = alloca;
+                context.getVariableTypes()[param.first] = param.second;
+
+                if (param.second == VarType::STRUCT) {
+                    std::string paramStructName = stmt.getParameterStructName(idx);
+                    if (!paramStructName.empty()) {
+                        context.setVariableStructName(param.first, paramStructName);
+                    }
+                }
+            }
             idx++;
         }
         
@@ -1093,10 +1153,15 @@ llvm::Value* StatementCodeGen::codegenFunctionStmt(CodeGen& context, FunctionStm
             if (stmt.getReturnType() == VarType::VOID) {
                 builder.CreateRetVoid();
             } else {
-                throw std::runtime_error("Function '" + stmt.getName() + 
-                                       "' with return type '" + 
-                                       TypeBounds::getTypeName(stmt.getReturnType()) + 
-                                       "' must return a value on all code paths");
+                if (stmt.getReturnType() == VarType::STRUCT) {
+                    throw std::runtime_error("Function '" + stmt.getName() + 
+                                           "' with struct return type must return a value on all code paths");
+                } else {
+                    throw std::runtime_error("Function '" + stmt.getName() + 
+                                           "' with return type '" + 
+                                           TypeBounds::getTypeName(stmt.getReturnType()) + 
+                                           "' must return a value on all code paths");
+                }
             }
         }
         
@@ -1175,7 +1240,6 @@ llvm::Value* StatementCodeGen::codegenIfStmt(CodeGen& context, IfStmt& stmt) {
     
     return nullptr;
 }
-
 llvm::Value* StatementCodeGen::codegenReturnStmt(CodeGen& context, ReturnStmt& stmt) {
     auto& builder = context.getBuilder();
     auto& llvmContext = context.getContext();
@@ -1193,6 +1257,33 @@ llvm::Value* StatementCodeGen::codegenReturnStmt(CodeGen& context, ReturnStmt& s
             throw std::runtime_error("Failed to generate return value");
         }
         
+        std::cout << "DEBUG: Return statement - expected type: ";
+        expectedReturnType->print(llvm::errs());
+        llvm::errs() << ", actual type: ";
+        retValue->getType()->print(llvm::errs());
+        llvm::errs() << "\n";
+        
+        if (expectedReturnType->isStructTy()) {
+            std::cout << "DEBUG: Handling struct return type\n";
+            
+            if (retValue->getType() != expectedReturnType) {
+                if (auto* alloca = llvm::dyn_cast<llvm::AllocaInst>(retValue)) {
+                    retValue = builder.CreateLoad(expectedReturnType, alloca, "struct_ret_val");
+                } else if (retValue->getType()->isPointerTy()) {
+                    retValue = builder.CreateLoad(expectedReturnType, retValue, "struct_ret_val");
+                } else {
+                    std::string expectedTypeStr, actualTypeStr;
+                    llvm::raw_string_ostream expectedOS(expectedTypeStr), actualOS(actualTypeStr);
+                    expectedReturnType->print(expectedOS);
+                    retValue->getType()->print(actualOS);
+                    throw std::runtime_error("Return type mismatch: expected struct " + expectedTypeStr + 
+                                           ", got " + actualTypeStr);
+                }
+            }
+            builder.CreateRet(retValue);
+            return nullptr;
+        }
+
         if (expectedReturnType->isIntegerTy(1)) {
             if (auto* constInt = dyn_cast<ConstantInt>(retValue)) {
                 if (!constInt->isZero()) {
@@ -1283,7 +1374,9 @@ llvm::Value* StatementCodeGen::codegenReturnStmt(CodeGen& context, ReturnStmt& s
         
         builder.CreateRet(retValue);
     } else {
-        if (expectedReturnType->isIntegerTy(1)) {
+        if (expectedReturnType->isStructTy()) {
+            throw std::runtime_error("Function with struct return type must return a value");
+        } else if (expectedReturnType->isIntegerTy(1)) {
             builder.CreateRet(ConstantInt::get(expectedReturnType, 0));
         } else if (!expectedReturnType->isVoidTy()) {
             throw std::runtime_error("Non-void function must return a value");
@@ -1639,6 +1732,7 @@ llvm::Value* StatementCodeGen::addRuntimeBoundsChecking(CodeGen& context, llvm::
     
     return value;
 }
+
 llvm::Value* StatementCodeGen::codegenStructDecl(CodeGen& context, StructDecl& decl) {
     auto& llvmContext = context.getContext();
     auto& module = context.getModule();
@@ -1670,34 +1764,151 @@ llvm::Value* StatementCodeGen::codegenStructDecl(CodeGen& context, StructDecl& d
     llvm::StructType* structType = llvm::StructType::create(llvmContext, fieldTypes, structName);
     
     context.registerStructType(structName, structType, decl.getFields());
+    for (const auto& [fieldName, defaultValueExpr] : decl.getFieldDefaults()) {
+        if (defaultValueExpr) {
+            try {
+                if (auto* floatExpr = dynamic_cast<AST::FloatExpr*>(defaultValueExpr.get())) {
+                    VarType fieldType = VarType::VOID;
+                    for (const auto& field : decl.getFields()) {
+                        if (field.first == fieldName) {
+                            fieldType = field.second;
+                            break;
+                        }
+                    }
+                    
+                    llvm::Constant* constantValue = nullptr;
+                    if (fieldType == VarType::FLOAT32) {
+                        constantValue = llvm::ConstantFP::get(llvm::Type::getFloatTy(llvmContext), (float)floatExpr->getValue());
+                    } else if (fieldType == VarType::FLOAT64) {
+                        constantValue = llvm::ConstantFP::get(llvm::Type::getDoubleTy(llvmContext), floatExpr->getValue());
+                    }
+                    
+                    if (constantValue) {
+                        context.registerStructFieldDefault(structName, fieldName, constantValue);
+                        std::cout << "DEBUG: Registered float default value for field '" << fieldName << "': " << floatExpr->getValue() << std::endl;
+                    }
+                }
+                else if (auto* numberExpr = dynamic_cast<AST::NumberExpr*>(defaultValueExpr.get())) {
+                    VarType fieldType = VarType::VOID;
+                    for (const auto& field : decl.getFields()) {
+                        if (field.first == fieldName) {
+                            fieldType = field.second;
+                            break;
+                        }
+                    }
+                    
+                    llvm::Constant* constantValue = nullptr;
+                    const BigInt& bigValue = numberExpr->getValue();
+                    
+                    if (fieldType == VarType::INT8) {
+                        constantValue = llvm::ConstantInt::get(llvm::Type::getInt8Ty(llvmContext), bigValue.toInt64(), true);
+                    } else if (fieldType == VarType::INT16) {
+                        constantValue = llvm::ConstantInt::get(llvm::Type::getInt16Ty(llvmContext), bigValue.toInt64(), true);
+                    } else if (fieldType == VarType::INT32) {
+                        constantValue = llvm::ConstantInt::get(llvm::Type::getInt32Ty(llvmContext), bigValue.toInt64(), true);
+                    } else if (fieldType == VarType::INT64) {
+                        constantValue = llvm::ConstantInt::get(llvm::Type::getInt64Ty(llvmContext), bigValue.toInt64(), true);
+                    } else if (fieldType == VarType::UINT8) {
+                        constantValue = llvm::ConstantInt::get(llvm::Type::getInt8Ty(llvmContext), bigValue.toInt64(), false);
+                    } else if (fieldType == VarType::UINT16) {
+                        constantValue = llvm::ConstantInt::get(llvm::Type::getInt16Ty(llvmContext), bigValue.toInt64(), false);
+                    } else if (fieldType == VarType::UINT32) {
+                        constantValue = llvm::ConstantInt::get(llvm::Type::getInt32Ty(llvmContext), bigValue.toInt64(), false);
+                    } else if (fieldType == VarType::UINT64) {
+                        constantValue = llvm::ConstantInt::get(llvm::Type::getInt64Ty(llvmContext), bigValue.toInt64(), false);
+                    }
+                    
+                    if (constantValue) {
+                        context.registerStructFieldDefault(structName, fieldName, constantValue);
+                        std::cout << "DEBUG: Registered integer default value for field '" << fieldName << "': " << bigValue.toString() << std::endl;
+                    }
+                }
+                else if (auto* boolExpr = dynamic_cast<AST::BooleanExpr*>(defaultValueExpr.get())) {
+                    llvm::Constant* constantValue = llvm::ConstantInt::get(llvm::Type::getInt1Ty(llvmContext), boolExpr->getValue() ? 1 : 0);
+                    context.registerStructFieldDefault(structName, fieldName, constantValue);
+                    std::cout << "DEBUG: Registered boolean default value for field '" << fieldName << "': " << boolExpr->getValue() << std::endl;
+                }
+                else {
+                    std::cout << "WARNING: Unsupported default value type for field '" << fieldName << "'" << std::endl;
+                }
+                
+            } catch (const std::exception& e) {
+                std::cout << "WARNING: Could not evaluate default value for field '" << fieldName << "': " << e.what() << std::endl;
+            }
+        }
+    }
+    
     
     std::cout << "DEBUG: Registered struct type '" << structName << "' with " << fieldTypes.size() << " fields" << std::endl;
 
     for (const auto& method : decl.getMethods()) {
-        std::cout << "DEBUG: Generating method declaration for '" << method->getName() << "' for struct '" << structName << "'" << std::endl;
+        std::cout << "DEBUG: Generating method declaration for '" << method->getName() 
+                  << "' for struct '" << structName << "'" << std::endl;
+        std::cout << "DEBUG: Method return type: " << static_cast<int>(method->getReturnType())
+                  << ", return struct name: '" << method->getReturnStructName() << "'" << std::endl;
 
-        std::string mangledName = structName + "." + method->getName();
+        std::string mangledName = method->getName();
+        std::cout << "DEBUG: Using mangled name: '" << mangledName << "'" << std::endl;
         
         std::vector<llvm::Type*> paramTypes;
         
         paramTypes.push_back(llvm::PointerType::get(structType, 0));
+        std::cout << "DEBUG: Added self parameter of type: ";
+        structType->print(llvm::errs());
+        std::cout << " for method " << mangledName << std::endl;
         
         const auto& params = method->getParameters();
-        size_t startIndex = 0;
-        if (!params.empty() && params[0].first == "self") {
-            startIndex = 1;
-        }
-        
-        for (size_t i = startIndex; i < params.size(); ++i) {
+        for (size_t i = 0; i < params.size(); ++i) {
             const auto& param = params[i];
-            auto paramType = context.getLLVMType(param.second);
+            
+            if (param.first == "self") {
+                std::cout << "DEBUG: Skipping 'self' parameter from method definition" << std::endl;
+                continue;
+            }
+            
+            llvm::Type* paramType = nullptr;
+            if (param.second == VarType::STRUCT) {
+                std::string paramStructName = method->getParameterStructName(i);
+
+                if (paramStructName.empty()) {
+                    paramStructName = structName;
+                    std::cout << "DEBUG: Inferred struct name '" << paramStructName << "' for parameter '" << param.first << "'" << std::endl;
+                }
+                
+                if (paramStructName.empty()) {
+                    throw std::runtime_error("Struct type requires a struct name for parameter: " + param.first);
+                }
+                paramType = llvm::PointerType::get(context.getStructType(paramStructName), 0);
+            } else {
+                paramType = context.getLLVMType(param.second);
+            }
+            
             if (!paramType) {
                 throw std::runtime_error("Unknown parameter type for method parameter: " + param.first);
             }
             paramTypes.push_back(paramType);
+            std::cout << "DEBUG: Added parameter '" << param.first << "' type: ";
+            paramType->print(llvm::errs());
+            std::cout << std::endl;
         }
         
-        auto returnType = context.getLLVMType(method->getReturnType());
+        llvm::Type* returnType = nullptr;
+        if (method->getReturnType() == VarType::STRUCT) {
+            std::string returnStructName = method->getReturnStructName();
+            std::cout << "DEBUG: Method returns struct: '" << returnStructName << "'" << std::endl;
+            
+            if (returnStructName.empty()) {
+                throw std::runtime_error("Struct type requires a struct name for method: " + method->getName());
+            }
+            
+            returnType = context.getStructType(returnStructName);
+            if (!returnType) {
+                throw std::runtime_error("Unknown struct return type: " + returnStructName);
+            }
+        } else {
+            returnType = context.getLLVMType(method->getReturnType());
+        }
+        
         if (!returnType) {
             throw std::runtime_error("Unknown return type for method: " + method->getName());
         }
@@ -1715,23 +1926,39 @@ llvm::Value* StatementCodeGen::codegenStructDecl(CodeGen& context, StructDecl& d
         for (auto& arg : function->args()) {
             if (argIdx == 0) {
                 arg.setName("self");
+                std::cout << "DEBUG: Set parameter " << argIdx << " name to 'self'" << std::endl;
             } else {
-                size_t paramIndex;
-                if (startIndex == 1) {
-                    paramIndex = argIdx;
-                } else {
-                    paramIndex = argIdx - 1;
+                size_t methodParamIdx = 0;
+                size_t nonSelfParamCount = 0;
+                
+                for (size_t i = 0; i < params.size(); ++i) {
+                    if (params[i].first != "self") {
+                        if (nonSelfParamCount == argIdx - 1) {
+                            methodParamIdx = i;
+                            break;
+                        }
+                        nonSelfParamCount++;
+                    }
                 }
                 
-                if (paramIndex < params.size()) {
-                    std::string paramName = params[paramIndex].first;
+                if (methodParamIdx < params.size()) {
+                    std::string paramName = params[methodParamIdx].first;
                     arg.setName(paramName);
+                    std::cout << "DEBUG: Set parameter " << argIdx << " name to '" << paramName << "'" << std::endl;
                 }
             }
             argIdx++;
         }
         
-        std::cout << "DEBUG: Created method declaration for '" << mangledName << "'" << std::endl;
+        std::cout << "DEBUG: Created method declaration for '" << mangledName << "' with " 
+                  << function->arg_size() << " parameters:" << std::endl;
+        argIdx = 0;
+        for (auto& arg : function->args()) {
+            std::cout << "  Param " << argIdx << ": " << arg.getName().str() << " - ";
+            arg.getType()->print(llvm::errs());
+            std::cout << std::endl;
+            argIdx++;
+        }
     }
     
     std::cout << "DEBUG: Successfully generated struct '" << structName << "' type definition" << std::endl;
@@ -1748,8 +1975,16 @@ void StatementCodeGen::codegenStructMethodBodies(CodeGen& context, StructDecl& d
     std::cout << "DEBUG codegenStructMethodBodies: Generating method bodies for struct '" << structName << "'" << std::endl;
     
     for (const auto& method : decl.getMethods()) {
-        std::string mangledName = structName + "." + method->getName();
+        std::string mangledName = method->getName();
+        std::cout << "DEBUG: Looking for method declaration: '" << mangledName << "'" << std::endl;
+        
         auto function = module.getFunction(mangledName);
+        
+        if (!function) {
+            std::string altName = structName + "." + method->getName().substr(structName.length() + 1);
+            std::cout << "DEBUG: Trying alternative name: '" << altName << "'" << std::endl;
+            function = module.getFunction(altName);
+        }
         
         if (!function) {
             throw std::runtime_error("Method declaration not found: " + mangledName);
@@ -1792,16 +2027,50 @@ void StatementCodeGen::codegenStructMethodBodies(CodeGen& context, StructDecl& d
             }
 
             unsigned idx = 0;
+            const auto& methodParams = method->getParameters();
             for (auto& arg : function->args()) {
-                if (idx == 0) {
+                if (idx == 0 && arg.getName() == "self") {
+                    arg.setName("self");
                     context.getNamedValues()["self"] = &arg;
                     context.getVariableTypes()["self"] = VarType::STRUCT;
                     context.setVariableStructName("self", structName);
+                    std::cout << "DEBUG: Set variable 'self' to struct '" << structName << "' (direct argument)" << std::endl;
                 } else {
-                    std::string paramName = arg.getName().str();
-                    auto alloca = builder.CreateAlloca(arg.getType(), nullptr, paramName);
-                    builder.CreateStore(&arg, alloca);
-                    context.getNamedValues()[paramName] = alloca;
+                    size_t methodParamIdx = 0;
+                    size_t nonSelfParamCount = 0;
+                    
+                    for (size_t i = 0; i < methodParams.size(); ++i) {
+                        if (methodParams[i].first != "self") {
+                            if (nonSelfParamCount == idx - 1) {
+                                methodParamIdx = i;
+                                break;
+                            }
+                            nonSelfParamCount++;
+                        }
+                    }
+                    
+                    if (methodParamIdx < methodParams.size()) {
+                        std::string paramName = methodParams[methodParamIdx].first;
+                        VarType paramType = methodParams[methodParamIdx].second;
+                        
+                        arg.setName(paramName);
+
+                        if (paramType == VarType::STRUCT) {
+                            context.getNamedValues()[paramName] = &arg;
+                            context.getVariableTypes()[paramName] = paramType;
+                            context.setVariableStructName(paramName, structName);
+                            std::cout << "DEBUG: Set struct parameter '" << paramName << "' to struct '" 
+                                      << structName << "' (direct argument)" << std::endl;
+                        } else {
+                            auto alloca = builder.CreateAlloca(arg.getType(), nullptr, paramName);
+                            builder.CreateStore(&arg, alloca);
+                            context.getNamedValues()[paramName] = alloca;
+                            context.getVariableTypes()[paramName] = paramType;
+                            
+                            std::cout << "DEBUG: Set parameter '" << paramName << "' with type " 
+                                      << static_cast<int>(paramType) << std::endl;
+                        }
+                    }
                 }
                 idx++;
             }

@@ -4,7 +4,7 @@
 #include "stmt_codegen.h"
 #include <llvm/IR/Verifier.h>
 #include "codegen/bounds.h"
-#include "ast/ast.h"
+#include "ast.h"
 #include <llvm/Support/TargetSelect.h>
 #include <llvm/Target/TargetMachine.h>
 #include <llvm/Target/TargetOptions.h>
@@ -169,6 +169,7 @@ bool CodeGen::isVariableConst(const std::string& name) {
 void CodeGen::registerStructType(const std::string& name, llvm::StructType* type, 
                                 const std::vector<std::pair<std::string, AST::VarType>>& fields) {
     structTypes[name] = type;
+    structFields_[name] = fields;
     
     auto& fieldMap = structFieldIndices[name];
     for (size_t i = 0; i < fields.size(); i++) {
@@ -535,7 +536,7 @@ bool CodeGen::compileToExecutable(const std::string& outputFilename, bool verbos
         }
 
         result = std::system(linkCmd.c_str());
-        
+
         if (result == 0 && !dllPath.empty()) {
             std::filesystem::path exeDir = std::filesystem::path(exeName).parent_path();
             std::filesystem::path targetDll = exeDir / std::filesystem::path(dllPath).filename();
@@ -578,4 +579,14 @@ bool CodeGen::compileToExecutable(const std::string& outputFilename, bool verbos
     }
 
     return true;
+}
+
+const std::vector<std::pair<std::string, AST::VarType>>& CodeGen::getStructFields(const std::string& structName) const {
+    static std::vector<std::pair<std::string, AST::VarType>> empty;
+    
+    auto it = structFields_.find(structName);
+    if (it != structFields_.end()) {
+        return it->second;
+    }
+    return empty;
 }

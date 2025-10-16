@@ -8,6 +8,7 @@
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/BasicBlock.h>
 #include <llvm/IR/Module.h>
+#include <llvm/IR/Constants.h>
 #include <map>
 #include <iostream>
 #include <unordered_map>
@@ -16,6 +17,10 @@
 
 namespace llvm {
     class StructType;
+}
+
+namespace AST {
+    class Expr;
 }
 
 namespace AST {
@@ -68,6 +73,9 @@ class CodeGen {
     std::map<std::string, std::string> variableStructNames;
     std::unordered_set<std::string> globalVariables;
     
+    std::unordered_map<std::string, std::unordered_map<std::string, std::unique_ptr<AST::Expr>>> structFieldDefaults_;
+    std::unordered_map<std::string, std::unordered_map<std::string, llvm::Constant*>> structFieldDefaults;
+    std::unordered_map<std::string, std::vector<std::pair<std::string, AST::VarType>>> structFields_;
 public:
     CodeGen();
     
@@ -98,6 +106,8 @@ public:
                            const std::vector<std::pair<std::string, AST::VarType>>& fields);
     int getStructFieldIndex(const std::string& structName, const std::string& fieldName);
     llvm::Type* getStructType(const std::string& name);
+
+    const std::vector<std::pair<std::string, AST::VarType>>& getStructFields(const std::string& structName) const;
     
     /* Type conversion */
     llvm::Type* getLLVMType(AST::VarType type, const std::string& structName = "");
@@ -229,6 +239,23 @@ public:
         return loopContinueBlocks.back();
     }
 
+    void registerStructFieldDefault(const std::string& structName, const std::string& fieldName, llvm::Constant* defaultValue) {
+        structFieldDefaults[structName][fieldName] = defaultValue;
+    }
+    
+    bool hasStructFieldDefault(const std::string& structName, const std::string& fieldName) const {
+        auto structIt = structFieldDefaults.find(structName);
+        if (structIt == structFieldDefaults.end()) return false;
+        return structIt->second.find(fieldName) != structIt->second.end();
+    }
+    
+    llvm::Constant* getStructFieldDefault(const std::string& structName, const std::string& fieldName) const {
+        auto structIt = structFieldDefaults.find(structName);
+        if (structIt == structFieldDefaults.end()) return nullptr;
+        auto fieldIt = structIt->second.find(fieldName);
+        if (fieldIt == structIt->second.end()) return nullptr;
+        return fieldIt->second;
+    }
 private:
     std::string currentTargetType;
     std::vector<llvm::BasicBlock*> loopExitBlocks;

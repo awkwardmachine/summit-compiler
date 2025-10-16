@@ -266,7 +266,6 @@ unique_ptr<Expr> Parser::parseBinaryExpression(int minPrecedence) {
     }
     return left;
 }
-
 unique_ptr<Expr> Parser::parseStructLiteral() {
     if (!match(TokenType::IDENTIFIER)) error("Expected struct name");
     string structName = tokens[current - 1].value;

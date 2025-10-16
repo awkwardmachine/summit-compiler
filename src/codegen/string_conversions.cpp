@@ -149,6 +149,32 @@ namespace AST {
             return value;
         }
 
+        if (value->getType()->isStructTy()) {
+            llvm::StructType* structType = llvm::cast<llvm::StructType>(value->getType());
+            std::string structName = structType->getName().str();
+            
+            std::cout << "DEBUG convertToString: Converting struct '" << structName << "' to string" << std::endl;
+            
+            std::string methodName = structName + ".to_str";
+            auto methodFunc = module.getFunction(methodName);
+            
+            if (methodFunc) {
+                std::cout << "DEBUG convertToString: Found to_str method for struct '" << structName << "'" << std::endl;
+
+                auto alloca = builder.CreateAlloca(structType, nullptr, "struct_temp");
+                builder.CreateStore(value, alloca);
+                
+                std::vector<llvm::Value*> args;
+                args.push_back(alloca);
+                return builder.CreateCall(methodFunc, args);
+            } else {
+                std::cout << "DEBUG convertToString: No to_str method found for struct '" << structName << "'" << std::endl;
+                
+                std::string fallbackStr = "[" + structName + " struct]";
+                return builder.CreateGlobalStringPtr(fallbackStr);
+            }
+        }
+
         auto sprintfFunc = module.getFunction("sprintf");
         if (!sprintfFunc) {
             auto* i32 = Type::getInt32Ty(llvmContext);

@@ -18,6 +18,23 @@
 using namespace llvm;
 using namespace AST;
 
+static llvm::Constant* createDefaultValue(llvm::Type* type, AST::VarType varType) {
+    if (type->isIntegerTy()) {
+        if (AST::TypeBounds::isUnsignedType(varType)) {
+            return llvm::ConstantInt::get(type, 0, false);
+        } else {
+            return llvm::ConstantInt::get(type, 0, true);
+        }
+    } else if (type->isFloatTy()) {
+        return llvm::ConstantFP::get(type, 0.0f);
+    } else if (type->isDoubleTy()) {
+        return llvm::ConstantFP::get(type, 0.0);
+    } else if (type->isPointerTy()) {
+        return llvm::ConstantPointerNull::get(static_cast<llvm::PointerType*>(type));
+    }
+    return nullptr;
+}
+
 llvm::Value* ExpressionCodeGen::codegenString(CodeGen& context, StringExpr& expr) {
     auto& builder = context.getBuilder();
     const std::string& strValue = expr.getValue();
@@ -469,7 +486,14 @@ llvm::Value* ExpressionCodeGen::codegenCall(CodeGen& context, CallExpr& expr) {
                 if (varType == VarType::STRUCT) {
                     selfPtr = context.lookupVariable(varName);
                     
-                    if (auto* alloca = llvm::dyn_cast<llvm::AllocaInst>(selfPtr)) {
+                    if (auto* arg = llvm::dyn_cast<llvm::Argument>(selfPtr)) {
+                        if (arg->getType()->isPointerTy()) {
+                            structName = context.getVariableStructName(varName);
+                            std::cout << "DEBUG: Method call on function parameter '" << varName 
+                                      << "' (struct: " << structName << ")" << std::endl;
+                        }
+                    }
+                    else if (auto* alloca = llvm::dyn_cast<llvm::AllocaInst>(selfPtr)) {
                         llvm::Type* allocatedType = alloca->getAllocatedType();
                         if (allocatedType->isStructTy()) {
                             llvm::StructType* structType = llvm::cast<llvm::StructType>(allocatedType);
@@ -493,18 +517,93 @@ llvm::Value* ExpressionCodeGen::codegenCall(CodeGen& context, CallExpr& expr) {
                     std::cout << "DEBUG: Calling method '" << mangledMethodName << "'" << std::endl;
                     
                     std::vector<llvm::Value*> args;
-                    args.push_back(selfPtr);
                     
+                    args.push_back(selfPtr);
+                    std::cout << "DEBUG: Added self pointer to method call" << std::endl;
+                    
+                    unsigned argIdx = 0;
                     for (auto& argExpr : expr.getArgs()) {
-                        auto argValue = argExpr->codegen(context);
+                        llvm::Value* argValue = nullptr;
+
+                        auto paramIter = methodFunc->arg_begin();
+                        std::advance(paramIter, argIdx + 1);
+                        
+                        bool shouldPassAsPointer = false;
+                        if (paramIter != methodFunc->arg_end()) {
+                            llvm::Type* expectedType = paramIter->getType();
+                            shouldPassAsPointer = expectedType->isPointerTy();
+                            std::cout << "DEBUG: Argument " << argIdx << " expected type is pointer: " 
+                                      << shouldPassAsPointer << std::endl;
+                        }
+                        
+                        if (shouldPassAsPointer) {
+                            if (auto* varExpr = dynamic_cast<VariableExpr*>(argExpr.get())) {
+                                std::cout << "DEBUG: Argument " << argIdx << " is a VariableExpr: " 
+                                          << varExpr->getName() << std::endl;
+                                
+                                auto varPtr = context.lookupVariable(varExpr->getName());
+                                auto varType = context.lookupVariableType(varExpr->getName());
+                                
+                                std::cout << "DEBUG: Variable type is: " << static_cast<int>(varType) << std::endl;
+                                
+                                if (varPtr && varType == VarType::STRUCT) {
+                                    argValue = varPtr;
+                                    std::cout << "DEBUG: Passing struct pointer directly for argument '" 
+                                              << varExpr->getName() << "'" << std::endl;
+                                } else {
+                                    std::cout << "DEBUG: Not passing as pointer - varPtr: " << (varPtr != nullptr) 
+                                              << ", is STRUCT: " << (varType == VarType::STRUCT) << std::endl;
+                                }
+                            } else {
+                                std::cout << "DEBUG: Argument " << argIdx << " is NOT a VariableExpr" << std::endl;
+                            }
+                        }
+                        
+                        if (!argValue) {
+                            std::cout << "DEBUG: Calling codegen() for argument " << argIdx << std::endl;
+                            argValue = argExpr->codegen(context);
+                        }
+                        
                         args.push_back(argValue);
+                        argIdx++;
+                    }
+                    
+                    std::cout << "DEBUG: Function '" << mangledMethodName << "' expects " 
+                              << methodFunc->arg_size() << " arguments, got " << args.size() << std::endl;
+                    
+                    unsigned i = 0;
+                    for (auto& arg : methodFunc->args()) {
+                        std::cout << "  Param " << i << ": " << arg.getName().str() << " - ";
+                        arg.getType()->print(llvm::errs());
+                        if (i < args.size()) {
+                            std::cout << " | Arg " << i << ": ";
+                            args[i]->getType()->print(llvm::errs());
+                        }
+                        std::cout << std::endl;
+                        i++;
+                    }
+
+                    if (args.size() != methodFunc->arg_size()) {
+                        std::string errorMsg = "Incorrect number of arguments passed to called function!\n";
+                        errorMsg += "  Function: " + mangledMethodName + "\n";
+                        errorMsg += "  Expected: " + std::to_string(methodFunc->arg_size()) + "\n";
+                        errorMsg += "  Got: " + std::to_string(args.size()) + "\n";
+                        errorMsg += "  Args: ";
+                        for (size_t i = 0; i < args.size(); ++i) {
+                            std::string typeStr;
+                            llvm::raw_string_ostream rso(typeStr);
+                            args[i]->getType()->print(rso);
+                            errorMsg += typeStr;
+                            if (i < args.size() - 1) errorMsg += ", ";
+                        }
+                        throw std::runtime_error(errorMsg);
                     }
                     
                     return builder.CreateCall(methodFunc, args);
                 }
             }
         }
-        
+
         auto calleeValue = expr.getCalleeExpr()->codegen(context);
         
         bool isMathFunction = false;
@@ -1085,7 +1184,14 @@ llvm::Value* ExpressionCodeGen::codegenMemberAccess(CodeGen& context, MemberAcce
                     std::string methodName = structName + "." + member;
                     auto methodFunc = context.getModule().getFunction(methodName);
                     if (methodFunc) {
-                        return methodFunc;
+                        if (methodFunc->arg_size() > 0) {
+                            auto firstParam = methodFunc->arg_begin();
+                            if (firstParam->getType()->isPointerTy() && 
+                                firstParam->getName() == "self") {
+                                std::cout << "DEBUG: Found method '" << methodName << "' with self parameter" << std::endl;
+                                return methodFunc;
+                            }
+                        }
                     }
                     
                     throw std::runtime_error("Unknown field or method '" + member + "' in struct '" + structName + "'");
@@ -1229,6 +1335,7 @@ llvm::Value* ExpressionCodeGen::codegenEnumValue(CodeGen& context, EnumValueExpr
     auto& builder = context.getBuilder();
     return builder.CreateLoad(builder.getInt32Ty(), enumValue, fullName.c_str());
 }
+
 llvm::Value* ExpressionCodeGen::codegenStructLiteral(CodeGen& context, StructLiteralExpr& expr) {
     auto& builder = context.getBuilder();
     auto& llvmContext = context.getContext();
@@ -1244,21 +1351,114 @@ llvm::Value* ExpressionCodeGen::codegenStructLiteral(CodeGen& context, StructLit
     }
     llvm::StructType* structTy = llvm::cast<llvm::StructType>(structType);
     
-    llvm::AllocaInst* alloca = builder.CreateAlloca(structTy, nullptr, structName + "_tmp");
-    
-    for (const auto& field : expr.getFields()) {
-        const std::string& fieldName = field.first;
-        auto fieldValue = field.second->codegen(context);
-        
-        int fieldIndex = context.getStructFieldIndex(structName, fieldName);
-        if (fieldIndex == -1) {
-            throw std::runtime_error("Unknown field '" + fieldName + "' in struct '" + structName + "'");
-        }
-        
-        llvm::Value* fieldPtr = builder.CreateStructGEP(structTy, alloca, fieldIndex, fieldName);
-        
-        builder.CreateStore(fieldValue, fieldPtr);
+    const auto& structFields = context.getStructFields(structName);
+    if (structFields.empty()) {
+        throw std::runtime_error("No field information found for struct: " + structName);
     }
     
-    return builder.CreateLoad(structTy, alloca, structName + "_val");
+    std::cout << "DEBUG: Generating struct literal for '" << structName << "' with " 
+              << expr.getFields().size() << " provided fields\n";
+    
+    llvm::AllocaInst* alloca = builder.CreateAlloca(structTy, nullptr, structName + "_tmp");
+    
+    std::unordered_map<std::string, llvm::Value*> providedFields;
+    for (const auto& field : expr.getFields()) {
+        std::cout << "DEBUG: Processing field '" << field.first << "' in struct literal\n";
+        providedFields[field.first] = field.second->codegen(context);
+    }
+    
+    for (size_t i = 0; i < structFields.size(); i++) {
+        const auto& fieldInfo = structFields[i];
+        const std::string& fieldName = fieldInfo.first;
+        VarType fieldType = fieldInfo.second;
+        
+        llvm::Value* fieldPtr = builder.CreateStructGEP(structTy, alloca, i, fieldName);
+        llvm::Type* expectedFieldType = structTy->getElementType(i);
+        
+        std::cout << "DEBUG: Initializing field '" << fieldName << "' type: ";
+        expectedFieldType->print(llvm::errs());
+        llvm::errs() << "\n";
+        
+        auto providedIt = providedFields.find(fieldName);
+        if (providedIt != providedFields.end()) {
+            llvm::Value* providedValue = providedIt->second;
+            
+            std::cout << "DEBUG: Field '" << fieldName << "' provided with value type: ";
+            providedValue->getType()->print(llvm::errs());
+            llvm::errs() << "\n";
+            
+            if (providedValue->getType() != expectedFieldType) {
+                if (expectedFieldType->isFPOrFPVectorTy() && providedValue->getType()->isIntegerTy()) {
+                    std::string fieldTypeStr = expectedFieldType->isFloatTy() ? "float32" : "float64";
+                    throw std::runtime_error(
+                        "Type mismatch for field '" + fieldName + "' in struct '" + structName + "': " +
+                        "expected " + fieldTypeStr + ", but got an integer. " +
+                        "Use a float literal like 30.0 instead of 30"
+                    );
+                }
+                else if (expectedFieldType->isIntegerTy() && providedValue->getType()->isFPOrFPVectorTy()) {
+                    throw std::runtime_error(
+                        "Type mismatch for field '" + fieldName + "' in struct '" + structName + "': " +
+                        "expected integer type, but got a float"
+                    );
+                }
+                else if (expectedFieldType->isIntegerTy() && providedValue->getType()->isIntegerTy()) {
+                    unsigned expectedBits = expectedFieldType->getIntegerBitWidth();
+                    unsigned actualBits = providedValue->getType()->getIntegerBitWidth();
+                    
+                    if (actualBits > expectedBits) {
+                        providedValue = builder.CreateTrunc(providedValue, expectedFieldType);
+                    } else if (actualBits < expectedBits) {
+                        if (TypeBounds::isUnsignedType(fieldType)) {
+                            providedValue = builder.CreateZExt(providedValue, expectedFieldType);
+                        } else {
+                            providedValue = builder.CreateSExt(providedValue, expectedFieldType);
+                        }
+                    }
+                }
+                else if (expectedFieldType->isFPOrFPVectorTy() && providedValue->getType()->isFPOrFPVectorTy()) {
+                    if (expectedFieldType->isFloatTy() && providedValue->getType()->isDoubleTy()) {
+                        providedValue = builder.CreateFPTrunc(providedValue, expectedFieldType);
+                    } else if (expectedFieldType->isDoubleTy() && providedValue->getType()->isFloatTy()) {
+                        providedValue = builder.CreateFPExt(providedValue, expectedFieldType);
+                    }
+                }
+                else {
+                    std::string expectedTypeStr;
+                    llvm::raw_string_ostream expectedOS(expectedTypeStr);
+                    expectedFieldType->print(expectedOS);
+                    
+                    std::string actualTypeStr;
+                    llvm::raw_string_ostream actualOS(actualTypeStr);
+                    providedValue->getType()->print(actualOS);
+                    
+                    throw std::runtime_error(
+                        "Type mismatch for field '" + fieldName + "' in struct '" + structName + "': " +
+                        "expected " + expectedTypeStr + ", got " + actualTypeStr
+                    );
+                }
+            }
+            
+            builder.CreateStore(providedValue, fieldPtr);
+            std::cout << "DEBUG: Stored provided value for field '" << fieldName << "'\n";
+        } else {
+            llvm::Constant* defaultVal = context.getStructFieldDefault(structName, fieldName);
+            if (defaultVal) {
+                std::cout << "DEBUG: Using stored default value for field '" << fieldName << "'\n";
+                builder.CreateStore(defaultVal, fieldPtr);
+            } else {
+                std::cout << "DEBUG: Field '" << fieldName << "' not provided and no default, using zero\n";
+                llvm::Type* fieldLLVMType = structTy->getElementType(i);
+                llvm::Constant* zeroVal = createDefaultValue(fieldLLVMType, fieldType);
+                builder.CreateStore(zeroVal, fieldPtr);
+            }
+        }
+    }
+    
+    llvm::Value* loadedStruct = builder.CreateLoad(structTy, alloca, structName + "_val");
+    std::cout << "DEBUG: Struct literal generated, returning type: ";
+    loadedStruct->getType()->print(llvm::errs());
+    llvm::errs() << "\n";
+    
+    return loadedStruct;
 }

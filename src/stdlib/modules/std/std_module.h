@@ -9,4 +9,5 @@ public:
     
 private:
     llvm::Value* handleIOMember(CodeGen& context, const std::string& callerModuleName);
+    llvm::Value* handleMathMember(CodeGen& context, const std::string& callerModuleName);
 };

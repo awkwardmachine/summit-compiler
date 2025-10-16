@@ -335,20 +335,26 @@ public:
         return oss.str();
     }
 };
+
 class FunctionStmt : public Stmt {
     std::string name;
     std::vector<std::pair<std::string, VarType>> parameters;
     VarType returnType;
     std::unique_ptr<BlockStmt> body;
     bool isEntryPoint;
+    std::string returnStructName;
+    std::vector<std::string> parameterStructNames;
+
 public:
     FunctionStmt(const std::string& name, 
                  std::vector<std::pair<std::string, VarType>> parameters,
                  VarType returnType,
                  std::unique_ptr<BlockStmt> body,
-                 bool isEntryPoint = false)
+                 bool isEntryPoint = false,
+                 std::string returnStructName = "")  // Add this parameter
         : name(name), parameters(std::move(parameters)), 
-          returnType(returnType), body(std::move(body)), isEntryPoint(isEntryPoint) {};
+          returnType(returnType), body(std::move(body)), 
+          isEntryPoint(isEntryPoint), returnStructName(std::move(returnStructName)) {}
     
     llvm::Value* codegen(::CodeGen& context) override;
     
@@ -359,11 +365,32 @@ public:
     bool getIsEntryPoint() const { return isEntryPoint; }
     void setIsEntryPoint(bool value) { isEntryPoint = value; }
     
+    // Add getter and setter for returnStructName
+    const std::string& getReturnStructName() const { return returnStructName; }
+    void setReturnStructName(const std::string& name) { returnStructName = name; }
+    
+    const std::string& getParameterStructName(size_t index) const { 
+        if (index < parameterStructNames.size()) {
+            return parameterStructNames[index];
+        }
+        static std::string empty;
+        return empty;
+    }
+    void setParameterStructNames(const std::vector<std::string>& names) { 
+        parameterStructNames = names; 
+    }
+    
     std::string toString(int indent = 0) const override {
         std::ostringstream oss;
         oss << indentStr(indent) << "FunctionStmt: " << quoted(name) 
-            << " -> " << static_cast<int>(returnType) 
-            << (isEntryPoint ? " [ENTRYPOINT]" : "") << "\n";
+            << " -> " << static_cast<int>(returnType);
+        
+        // Show struct name if return type is STRUCT
+        if (returnType == VarType::STRUCT && !returnStructName.empty()) {
+            oss << " (" << returnStructName << ")";
+        }
+        
+        oss << (isEntryPoint ? " [ENTRYPOINT]" : "") << "\n";
         oss << indentStr(indent + 1) << "Parameters (" << parameters.size() << "):\n";
         for (const auto& param : parameters) {
             oss << indentStr(indent + 2) << quoted(param.first) 
@@ -598,16 +625,32 @@ public:
         return indentStr(indent) + "ContinueStmt";
     }
 };
-
 class StructDecl : public Stmt {
     std::string name;
     std::vector<std::pair<std::string, VarType>> fields;
     std::vector<std::unique_ptr<FunctionStmt>> methods;
+    // Store defaults as simple map
+    std::unordered_map<std::string, std::unique_ptr<Expr>> fieldDefaults;
 public:
     StructDecl(const std::string& name, 
                std::vector<std::pair<std::string, VarType>> fields,
                std::vector<std::unique_ptr<FunctionStmt>> methods = {})
         : name(name), fields(std::move(fields)), methods(std::move(methods)) {}
+    
+    // Simple method to add defaults
+    void addFieldDefault(const std::string& fieldName, std::unique_ptr<Expr> defaultValue) {
+        fieldDefaults[fieldName] = std::move(defaultValue);
+    }
+    
+    // Get default value
+    Expr* getFieldDefault(const std::string& fieldName) const {
+        auto it = fieldDefaults.find(fieldName);
+        return it != fieldDefaults.end() ? it->second.get() : nullptr;
+    }
+    
+    const std::unordered_map<std::string, std::unique_ptr<Expr>>& getFieldDefaults() const {
+        return fieldDefaults;
+    }
     
     llvm::Value* codegen(::CodeGen& context) override;
     
@@ -624,7 +667,12 @@ public:
         oss << indentStr(indent + 1) << "Fields:\n";
         for (const auto& field : fields) {
             oss << indentStr(indent + 2) << quoted(field.first) 
-                << " : " << static_cast<int>(field.second) << "\n";
+                << " : " << static_cast<int>(field.second);
+            auto defaultIt = fieldDefaults.find(field.first);
+            if (defaultIt != fieldDefaults.end() && defaultIt->second) {
+                oss << " = " << defaultIt->second->toString(0);
+            }
+            oss << "\n";
         }
         
         oss << indentStr(indent + 1) << "Methods:\n";
@@ -634,7 +682,6 @@ public:
         return oss.str();
     }
 };
-
 class StructLiteralExpr : public Expr {
     std::string structName;
     std::vector<std::pair<std::string, std::unique_ptr<Expr>>> fields;
