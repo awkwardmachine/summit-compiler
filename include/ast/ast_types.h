@@ -25,6 +25,7 @@ namespace AST {
         STRING,
         MODULE,
         ENUM,
+        STRUCT,
         VOID
     };
 

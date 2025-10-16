@@ -19,6 +19,8 @@ namespace StatementCodeGen {
     llvm::Value* codegenEnumDecl(CodeGen& context, AST::EnumDecl& stmt);
     llvm::Value* codegenContinueStmt(CodeGen& context, AST::ContinueStmt& stmt);
     llvm::Value* codegenBreakStmt(CodeGen& context, AST::BreakStmt& stmt);
+    llvm::Value* codegenStructDecl(CodeGen& context, AST::StructDecl& stmt);
+    void codegenStructMethodBodies(CodeGen& context, AST::StructDecl& decl);
 
     llvm::Value* addRuntimeBoundsChecking(CodeGen& context, llvm::Value* value, AST::VarType targetType, const std::string& varName);
 }

@@ -1,50 +1,27 @@
 const lib = @import("std");
 const out = lib.io;
 
-func main() -> uint0
-    out.println("Simple Calculator");
-    
-    while (true) then
-        out.println("1: Add | 2: Subtract | 3: Multiply | 4: Divide | 0: Exit");
-        out.print("Choose: ");
-        
-        var choice: int32 = out.read_int();
-        
-        if (choice == 0) then
-            out.println("Goodbye!");
-            stop;
-        end
-        
-        if (choice < 1 or choice > 4) then
-            out.println("Invalid! Enter 0-4");
-            next;
-        end
-        
-        out.print("First number: ");
-        var a: float64 = out.read_int();
-        
-        out.print("Second number: ");
-        var b: float64 = out.read_int();
-        
-        var result: float64 = 0.0;
-        
-        if (choice == 1) then
-            result = a + b;
-        elseif (choice == 2) then
-            result = a - b;
-        elseif (choice == 3) then
-            result = a * b;
-        elseif (choice == 4) then
-            if (b == 0.0) then
-                out.println("Error: Cannot divide by zero!");
-                next;
-            end
-            result = a / b;
-        end
-        
-        out.println("Result: " + (result as str));
-        out.println("");
+var x: int8 = 5;
+
+struct Person
+    name: str;
+    age: int32;
+    height: float64;
+
+    func greet()
+        out.println("My name is " + self.name + " and I am " + (self.age as str) + " years old!");
     end
-    
+end
+
+func main() -> uint0
+    var john: Person = Person{name: "John Doe", age: 30, height: 1.75};
+    const mary: Person = Person{name: "Mary Smith", age: 25, height: 1.65};
+
+    out.println(mary.name);
+    out.println(mary.age);
+    out.println(mary.height);
+
+    mary.greet();
+
     ret 0;
 end

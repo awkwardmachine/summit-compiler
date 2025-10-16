@@ -239,19 +239,32 @@ class VariableDecl : public Stmt {
     VarType type;
     bool isConst;
     std::unique_ptr<Expr> value;
+    std::string structName;
+
 public:
-    VariableDecl(const std::string& name, VarType type, bool isConst, std::unique_ptr<Expr> value)
-        : name(name), type(type), isConst(isConst), value(std::move(value)) {}
+    VariableDecl(const std::string& name, VarType type, bool isConst, 
+                 std::unique_ptr<Expr> value, const std::string& structName = "")
+        : name(name), type(type), isConst(isConst), 
+          value(std::move(value)), structName(structName) {}
+    
     llvm::Value* codegen(::CodeGen& context) override;
+    
     const std::string& getName() const { return name; }
     VarType getType() const { return type; }
     bool getIsConst() const { return isConst; }
     const std::unique_ptr<Expr>& getValue() const { return value; }
+    const std::string& getStructName() const { return structName; }
+    
     std::string toString(int indent = 0) const override {
         std::ostringstream oss;
         oss << indentStr(indent) << "VariableDecl: " << quoted(name) 
-            << " Type: " << static_cast<int>(type)
-            << " " << (isConst ? "(const)" : "(var)") << "\n";
+            << " Type: " << static_cast<int>(type);
+        
+        if (type == VarType::STRUCT && !structName.empty()) {
+            oss << " (" << structName << ")";
+        }
+        
+        oss << " " << (isConst ? "(const)" : "(var)") << "\n";
         oss << (value ? value->toString(indent + 1) : indentStr(indent + 1) + "null");
         return oss.str();
     }
@@ -583,6 +596,72 @@ public:
     
     std::string toString(int indent = 0) const override {
         return indentStr(indent) + "ContinueStmt";
+    }
+};
+
+class StructDecl : public Stmt {
+    std::string name;
+    std::vector<std::pair<std::string, VarType>> fields;
+    std::vector<std::unique_ptr<FunctionStmt>> methods;
+public:
+    StructDecl(const std::string& name, 
+               std::vector<std::pair<std::string, VarType>> fields,
+               std::vector<std::unique_ptr<FunctionStmt>> methods = {})
+        : name(name), fields(std::move(fields)), methods(std::move(methods)) {}
+    
+    llvm::Value* codegen(::CodeGen& context) override;
+    
+    const std::string& getName() const { return name; }
+    const std::vector<std::pair<std::string, VarType>>& getFields() const { return fields; }
+    const std::vector<std::unique_ptr<FunctionStmt>>& getMethods() const { return methods; }
+    
+    std::string toString(int indent = 0) const override {
+        std::ostringstream oss;
+        oss << indentStr(indent) << "StructDecl: " << quoted(name) 
+            << " with " << fields.size() << " field(s) and " 
+            << methods.size() << " method(s)\n";
+        
+        oss << indentStr(indent + 1) << "Fields:\n";
+        for (const auto& field : fields) {
+            oss << indentStr(indent + 2) << quoted(field.first) 
+                << " : " << static_cast<int>(field.second) << "\n";
+        }
+        
+        oss << indentStr(indent + 1) << "Methods:\n";
+        for (const auto& method : methods) {
+            oss << method->toString(indent + 2) << "\n";
+        }
+        return oss.str();
+    }
+};
+
+class StructLiteralExpr : public Expr {
+    std::string structName;
+    std::vector<std::pair<std::string, std::unique_ptr<Expr>>> fields;
+public:
+    StructLiteralExpr(const std::string& structName,
+                     std::vector<std::pair<std::string, std::unique_ptr<Expr>>> fields)
+        : structName(structName), fields(std::move(fields)) {}
+    
+    llvm::Value* codegen(::CodeGen& context) override;
+    
+    const std::string& getStructName() const { return structName; }
+    const std::vector<std::pair<std::string, std::unique_ptr<Expr>>>& getFields() const { return fields; }
+    
+    std::string toString(int indent = 0) const override {
+        std::ostringstream oss;
+        oss << indentStr(indent) << "StructLiteralExpr: " << quoted(structName) 
+            << " with " << fields.size() << " field(s)\n";
+        for (const auto& field : fields) {
+            oss << indentStr(indent + 1) << quoted(field.first) << " = ";
+            if (field.second) {
+                oss << field.second->toString(0);
+            } else {
+                oss << "null";
+            }
+            oss << "\n";
+        }
+        return oss.str();
     }
 };
 

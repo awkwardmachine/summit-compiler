@@ -13,7 +13,7 @@ std::string Token::toString() const {
         {TokenType::FALSE, "FALSE"}, {TokenType::FUNC, "FUNC"}, {TokenType::RETURN, "RET"},
         {TokenType::ENTRYPOINT, "ENTRYPOINT"}, {TokenType::WHILE, "WHILE"}, {TokenType::FOR, "FOR"},
         {TokenType::DO, "DO"}, {TokenType::ENUM, "ENUM"}, {TokenType::STOP, "STOP"},
-        {TokenType::NEXT, "NEXT"},
+        {TokenType::NEXT, "NEXT"}, {TokenType::STRUCT, "STRUCT"},
         
         {TokenType::INT4, "INT4"}, {TokenType::INT8, "INT8"}, {TokenType::INT12, "INT12"},
         {TokenType::INT16, "INT16"}, {TokenType::INT24, "INT24"}, {TokenType::INT32, "INT32"},

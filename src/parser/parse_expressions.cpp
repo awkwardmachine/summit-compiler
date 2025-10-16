@@ -24,6 +24,10 @@ unique_ptr<Expr> Parser::parsePrimary() {
         error("@entrypoint should be used as a standalone statement, not in an expression");
     }
 
+    if (check(TokenType::IDENTIFIER) && checkNext(TokenType::LBRACE)) {
+        return parseStructLiteral();
+    }
+
     if (check(TokenType::BUILTIN) || (check(TokenType::IDENTIFIER) && peek().value == "@get")) {
         return parseBuiltinCall();
     }
@@ -113,6 +117,45 @@ unique_ptr<Expr> Parser::parsePrimary() {
 
     error("Expected expression, but found: " + tok.value);
     return nullptr;
+}
+
+unique_ptr<Expr> Parser::parseMemberAccess(unique_ptr<Expr> object) {
+    if (!match(TokenType::IDENTIFIER)) {
+        error("Expected identifier after '.'");
+    }
+    string member = tokens[current - 1].value;
+
+    if (auto* varExpr = dynamic_cast<VariableExpr*>(object.get())) {
+        std::string varName = varExpr->getName();
+        
+        if (isEnumType(varName)) {
+            return make_unique<EnumValueExpr>(varName, member);
+        }
+        
+        if (!varName.empty() && isupper(varName[0])) {
+            return make_unique<EnumValueExpr>(varName, member);
+        }
+    }
+    auto memberAccess = make_unique<MemberAccessExpr>(move(object), member);
+
+    if (match(TokenType::LPAREN)) {
+        vector<unique_ptr<Expr>> args;
+        if (!check(TokenType::RPAREN)) {
+            do { 
+                args.push_back(parseExpression()); 
+            } while (match(TokenType::COMMA));
+        }
+        if (!match(TokenType::RPAREN)) {
+            error("Expected ')' after function arguments");
+        }
+        return make_unique<CallExpr>(move(memberAccess), move(args));
+    }
+
+    if (match(TokenType::DOT)) {
+        return parseMemberAccess(move(memberAccess));
+    }
+    
+    return memberAccess;
 }
 
 unique_ptr<Expr> Parser::parseUnaryExpression() {
@@ -223,43 +266,40 @@ unique_ptr<Expr> Parser::parseBinaryExpression(int minPrecedence) {
     }
     return left;
 }
-unique_ptr<Expr> Parser::parseMemberAccess(unique_ptr<Expr> object) {
-    if (!match(TokenType::IDENTIFIER)) {
-        error("Expected identifier after '.'");
-    }
-    string member = tokens[current - 1].value;
 
-    if (auto* varExpr = dynamic_cast<VariableExpr*>(object.get())) {
-        std::string varName = varExpr->getName();
-        
-        if (isEnumType(varName)) {
-            return make_unique<EnumValueExpr>(varName, member);
-        }
-        
-        if (!varName.empty() && isupper(varName[0])) {
-            return make_unique<EnumValueExpr>(varName, member);
-        }
-    }
-    auto memberAccess = make_unique<MemberAccessExpr>(move(object), member);
-
-    if (match(TokenType::LPAREN)) {
-        vector<unique_ptr<Expr>> args;
-        if (!check(TokenType::RPAREN)) {
-            do { 
-                args.push_back(parseExpression()); 
-            } while (match(TokenType::COMMA));
-        }
-        if (!match(TokenType::RPAREN)) {
-            error("Expected ')' after function arguments");
-        }
-        return make_unique<CallExpr>(move(memberAccess), move(args));
-    }
-
-    if (match(TokenType::DOT)) {
-        return parseMemberAccess(move(memberAccess));
+unique_ptr<Expr> Parser::parseStructLiteral() {
+    if (!match(TokenType::IDENTIFIER)) error("Expected struct name");
+    string structName = tokens[current - 1].value;
+    
+    if (!match(TokenType::LBRACE)) {
+        error("Expected '{' for struct literal");
     }
     
-    return memberAccess;
+    vector<pair<string, unique_ptr<Expr>>> fields;
+    
+    while (!check(TokenType::RBRACE) && !isAtEnd()) {
+        if (!match(TokenType::IDENTIFIER)) error("Expected field name");
+        string fieldName = tokens[current - 1].value;
+        
+        if (!match(TokenType::COLON)) {
+            error("Expected ':' after field name");
+        }
+        
+        auto value = parseExpression();
+        fields.emplace_back(fieldName, move(value));
+        
+        if (!check(TokenType::RBRACE)) {
+            if (!match(TokenType::COMMA)) {
+                error("Expected ',' or '}' after field value");
+            }
+        }
+    }
+    
+    if (!match(TokenType::RBRACE)) {
+        error("Expected '}' after struct literal");
+    }
+    
+    return make_unique<StructLiteralExpr>(structName, move(fields));
 }
 
 unique_ptr<Expr> Parser::parseBuiltinCall() {

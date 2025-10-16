@@ -70,11 +70,29 @@ unique_ptr<Stmt> Parser::parseVariableDeclaration() {
     if (!match(TokenType::IDENTIFIER)) error("Expected variable name");
     string name = tokens[current - 1].value;
     
-    VarType type = VarType::VOID;
+    if (isInGlobalScope()) {
+        registerGlobalVariable(name);
+        std::cout << "DEBUG: Registered global variable: " << name << std::endl;
+    }
     
+    VarType type = VarType::VOID;
+    std::string structName = "";
+
     if (check(TokenType::COLON)) {
         advance();
-        type = parseType();
+        if (check(TokenType::IDENTIFIER)) {
+            string typeName = peek().value;
+            advance();
+            
+            if (isStructType(typeName)) {
+                type = VarType::STRUCT;
+                structName = typeName;
+            } else {
+                throw std::runtime_error("Unknown type: " + typeName);
+            }
+        } else {
+            type = parseType();
+        }
     } else if (!isConst) {
         error("Expected ':' and type annotation for variable '" + name + "'");
     }
@@ -120,7 +138,8 @@ unique_ptr<Stmt> Parser::parseVariableDeclaration() {
         errorAt(lastToken, "Expected ';' after variable declaration");
     }
     
-    return make_unique<VariableDecl>(name, type, isConst, move(value));
+    std::cout << "DEBUG: Creating VariableDecl for '" << name << "' with type " << static_cast<int>(type) << " and structName '" << structName << "'" << std::endl;
+    return make_unique<VariableDecl>(name, type, isConst, move(value), structName);
 }
 
 unique_ptr<Stmt> Parser::parseAssignment() {
@@ -143,6 +162,8 @@ unique_ptr<Stmt> Parser::parseBlock() {
         error("Expected '{' for block");
     }
     
+    enterScope();
+    
     auto block = make_unique<BlockStmt>();
     
     while (!check(TokenType::RBRACE) && !isAtEnd()) {
@@ -152,6 +173,8 @@ unique_ptr<Stmt> Parser::parseBlock() {
     if (!match(TokenType::RBRACE)) {
         error("Expected '}' after block");
     }
+
+    exitScope();
     
     return block;
 }
@@ -175,14 +198,20 @@ unique_ptr<Stmt> Parser::parseIfStatement() {
         error("Expected 'then' after if condition");
     }
     
+    enterScope();
+    
     auto thenBlock = make_unique<BlockStmt>();
     while (!check(TokenType::ELSE) && !check(TokenType::ELSEIF) && !check(TokenType::END) && !isAtEnd()) {
         thenBlock->addStatement(parseStatement());
     }
     
+    exitScope();
+    
     unique_ptr<Stmt> elseBranch = nullptr;
     
     if (match(TokenType::ELSEIF)) {
+        enterScope();
+        
         if (!match(TokenType::LPAREN)) {
             error("Expected '(' after 'elseif'");
         }
@@ -199,25 +228,35 @@ unique_ptr<Stmt> Parser::parseIfStatement() {
             elseifThenBlock->addStatement(parseStatement());
         }
         
+        exitScope();
+        
         unique_ptr<Stmt> elseifElseBranch = nullptr;
         if (check(TokenType::ELSEIF)) {
             elseifElseBranch = parseElseIfChain();
         }
         else if (match(TokenType::ELSE)) {
+            enterScope();
+            
             auto elseBlock = make_unique<BlockStmt>();
             while (!check(TokenType::END) && !isAtEnd()) {
                 elseBlock->addStatement(parseStatement());
             }
+            exitScope();
+            
             elseifElseBranch = move(elseBlock);
         }
         
         elseBranch = make_unique<IfStmt>(move(elseifCondition), move(elseifThenBlock), move(elseifElseBranch));
     }
     else if (match(TokenType::ELSE)) {
+        enterScope();
+        
         auto elseBlock = make_unique<BlockStmt>();
         while (!check(TokenType::END) && !isAtEnd()) {
             elseBlock->addStatement(parseStatement());
         }
+        exitScope();
+        
         elseBranch = move(elseBlock);
     }
     
@@ -275,6 +314,8 @@ unique_ptr<Stmt> Parser::parseFunctionDeclaration() {
     if (!match(TokenType::IDENTIFIER)) error("Expected function name");
     string name = tokens[current - 1].value;
     
+    enterScope();
+    
     if (!match(TokenType::LPAREN)) error("Expected '(' after function name");
     
     vector<pair<string, VarType>> parameters;
@@ -304,6 +345,8 @@ unique_ptr<Stmt> Parser::parseFunctionDeclaration() {
     if (!match(TokenType::END)) {
         error("Expected 'end' after function body");
     }
+    
+    exitScope();
     
     return make_unique<FunctionStmt>(name, move(parameters), returnType, move(body), isEntryPoint);
 }
@@ -363,6 +406,8 @@ unique_ptr<Stmt> Parser::parseForLoopStatement() {
     if (!match(TokenType::LPAREN)) {
         error("Expected '(' after 'for'");
     }
+
+    enterScope();
 
     if (!match(TokenType::IDENTIFIER)) {
         error("Expected variable name in for loop");
@@ -428,6 +473,8 @@ unique_ptr<Stmt> Parser::parseForLoopStatement() {
         increment = parseExpression();
     }
 
+    exitScope();
+
     if (!match(TokenType::RPAREN)) {
         error("Expected ')' after for loop header");
     }
@@ -449,6 +496,92 @@ unique_ptr<Stmt> Parser::parseForLoopStatement() {
                                     move(condition), move(increment), move(body));
 }
 
+unique_ptr<Stmt> Parser::parseStructDeclaration() {
+    if (!match(TokenType::STRUCT)) error("Expected 'struct'");
+    if (!match(TokenType::IDENTIFIER)) error("Expected struct name");
+    string name = tokens[current - 1].value;
+
+    registerStructType(name);
+    
+    vector<pair<string, VarType>> fields;
+    vector<unique_ptr<FunctionStmt>> methods;
+    
+    while (!check(TokenType::END) && !isAtEnd()) {
+        if (check(TokenType::IDENTIFIER) && checkNext(TokenType::COLON)) {
+            string fieldName = peek().value;
+            advance();
+            advance();
+            
+            VarType fieldType = parseType();
+            fields.emplace_back(fieldName, fieldType);
+            
+            if (!match(TokenType::SEMICOLON)) {
+                error("Expected ';' after field declaration");
+            }
+        }
+        else if (check(TokenType::FUNC)) {
+            auto method = parseMethodDeclaration(name);
+            methods.push_back(move(method));
+        }
+        else {
+            error("Expected field declaration or method in struct");
+        }
+    }
+    
+    if (!match(TokenType::END)) {
+        error("Expected 'end' after struct definition");
+    }
+    
+    return make_unique<StructDecl>(name, move(fields), move(methods));
+}
+
+unique_ptr<FunctionStmt> Parser::parseMethodDeclaration(const string& structName) {
+    if (!match(TokenType::FUNC)) error("Expected 'func'");
+    if (!match(TokenType::IDENTIFIER)) error("Expected method name");
+    string name = tokens[current - 1].value;
+
+    enterScope();
+    
+    if (!match(TokenType::LPAREN)) error("Expected '(' after method name");
+    
+    vector<pair<string, VarType>> parameters;
+    
+    parameters.emplace_back("self", VarType::STRUCT);
+    
+    if (!check(TokenType::RPAREN)) {
+        do {
+            if (!match(TokenType::IDENTIFIER)) error("Expected parameter name");
+            string paramName = tokens[current - 1].value;
+            if (!match(TokenType::COLON)) error("Expected ':' after parameter name");
+            VarType paramType = parseType();
+            parameters.emplace_back(paramName, paramType);
+        } while (match(TokenType::COMMA));
+    }
+    
+    if (!match(TokenType::RPAREN)) error("Expected ')' after parameters");
+    
+    VarType returnType = VarType::VOID;
+    if (match(TokenType::MINUS)) {
+        if (!match(TokenType::GREATER)) error("Expected '>' after '-' for return type");
+        returnType = parseType();
+    }
+
+    auto body = make_unique<BlockStmt>();
+    while (!check(TokenType::END) && !isAtEnd()) {
+        body->addStatement(parseStatement());
+    }
+    
+    if (!match(TokenType::END)) {
+        error("Expected 'end' after method body");
+    }
+    
+    exitScope();
+    
+    auto method = make_unique<FunctionStmt>(name, move(parameters), returnType, move(body), false);
+    
+    return method;
+}
+
 unique_ptr<Stmt> Parser::parseStatement() {
     if (check(TokenType::ENTRYPOINT)) {
         return parseEntrypointStatement();
@@ -456,6 +589,9 @@ unique_ptr<Stmt> Parser::parseStatement() {
     
     if (check(TokenType::FUNC)) {
         return parseFunctionDeclaration();
+    }
+    if (check(TokenType::STRUCT)) {
+        return parseStructDeclaration();
     }
     if (check(TokenType::RETURN)) {
         return parseReturnStatement();

@@ -8,6 +8,7 @@
 
 #include <llvm/IR/Verifier.h>
 #include <llvm/IR/BasicBlock.h>
+#include <llvm/IR/Type.h>
 
 using namespace llvm;
 using namespace AST;
@@ -40,8 +41,25 @@ llvm::Value* StatementCodeGen::codegenVariableDecl(CodeGen& context, VariableDec
     
     bool isGlobal = !builder.GetInsertBlock();
     
+    std::cout << "DEBUG codegenVariableDecl: Processing variable '" << name 
+              << "' type=" << static_cast<int>(type)
+              << " isGlobal=" << isGlobal 
+              << " structName='" << decl.getStructName() << "'" << std::endl;
+    
     if (isGlobal) {
-        llvm::Type* llvmType = context.getLLVMType(type);
+        context.registerGlobalVariable(decl.getName());
+        std::cout << "DEBUG: Registered global variable in codegen: " << decl.getName() << std::endl;
+        llvm::Type* llvmType;
+        if (type == VarType::STRUCT) {
+            const std::string& structName = decl.getStructName();
+            if (structName.empty()) {
+                throw std::runtime_error("Struct type requires a struct name for global variable: " + name);
+            }
+            llvmType = context.getStructType(structName);
+        } else {
+            llvmType = context.getLLVMType(type);
+        }
+        
         if (!llvmType) {
             throw std::runtime_error("Unknown type for global variable: " + name);
         }
@@ -223,6 +241,24 @@ llvm::Value* StatementCodeGen::codegenVariableDecl(CodeGen& context, VariableDec
                     return globalVar;
                 }
             }
+            else if (auto* structLiteral = dynamic_cast<StructLiteralExpr*>(valueExpr.get())) {
+                auto value = ExpressionCodeGen::codegenStructLiteral(context, *structLiteral);
+                if (llvm::isa<llvm::Constant>(value)) {
+                    auto globalVar = new llvm::GlobalVariable(
+                        module,
+                        value->getType(),
+                        isConst,
+                        llvm::GlobalValue::InternalLinkage,
+                        llvm::cast<llvm::Constant>(value),
+                        name
+                    );
+                    context.getNamedValues()[name] = globalVar;
+                    context.getVariableTypes()[name] = type;
+                    return globalVar;
+                } else {
+                    throw std::runtime_error("Global struct variables can only be initialized with constant expressions");
+                }
+            }
             else {
                 auto value = valueExpr->codegen(context);
                 if (llvm::isa<llvm::Constant>(value)) {
@@ -255,7 +291,26 @@ llvm::Value* StatementCodeGen::codegenVariableDecl(CodeGen& context, VariableDec
             return globalVar;
         }
     } else {
-        llvm::Type* llvmType = context.getLLVMType(type);
+        std::cout << "DEBUG: codegenVariableDecl - LOCAL variable '" << name 
+                  << "' type=" << static_cast<int>(type) 
+                  << " structName='" << decl.getStructName() << "'" << std::endl;
+        
+        llvm::Type* llvmType;
+        if (type == VarType::STRUCT) {
+            const std::string& structName = decl.getStructName();
+            std::cout << "DEBUG: Local variable '" << name << "' declared with struct type, structName from decl = '" << structName << "'" << std::endl;
+            if (structName.empty()) {
+                std::cout << "ERROR: structName is empty!" << std::endl;
+                throw std::runtime_error("Struct type requires a struct name for variable: " + name);
+            }
+            llvmType = context.getStructType(structName);
+            if (!llvmType) {
+                throw std::runtime_error("Unknown struct type: " + structName);
+            }
+        } else {
+            llvmType = context.getLLVMType(type);
+        }
+        
         if (!llvmType) {
             throw std::runtime_error("Unknown type for variable: " + name);
         }
@@ -271,7 +326,7 @@ llvm::Value* StatementCodeGen::codegenVariableDecl(CodeGen& context, VariableDec
             
             context.clearCurrentTargetType();
             
-            if (TypeBounds::isIntegerType(type) && value->getType()->isIntegerTy()) {
+            if (type != VarType::STRUCT && TypeBounds::isIntegerType(type) && value->getType()->isIntegerTy()) {
                 if (auto* constInt = llvm::dyn_cast<llvm::ConstantInt>(value)) {
                     BigInt bigValue;
                     if (TypeBounds::isUnsignedType(type)) {
@@ -292,7 +347,7 @@ llvm::Value* StatementCodeGen::codegenVariableDecl(CodeGen& context, VariableDec
                 }
             }
             
-            if (value->getType() != llvmType) {
+            if (type != VarType::STRUCT && value->getType() != llvmType) {
                 if (llvmType->isIntegerTy() && value->getType()->isIntegerTy()) {
                     unsigned targetBits = llvmType->getIntegerBitWidth();
                     unsigned sourceBits = value->getType()->getIntegerBitWidth();
@@ -425,9 +480,11 @@ llvm::Value* StatementCodeGen::codegenAssignment(CodeGen& context, AssignmentStm
     builder.CreateStore(value, var);
     return value;
 }
+
 llvm::Value* StatementCodeGen::codegenExprStmt(CodeGen& context, ExprStmt& stmt) {
     return stmt.getExpr()->codegen(context);
 }
+
 llvm::Value* StatementCodeGen::codegenGlobalVariable(CodeGen& context, VariableDecl& decl) {
     if (decl.getType() == VarType::VOID) {
         throw std::runtime_error("Cannot declare global variable of type 'void'");
@@ -435,6 +492,9 @@ llvm::Value* StatementCodeGen::codegenGlobalVariable(CodeGen& context, VariableD
 
     auto& module = context.getModule();
     auto& llvmContext = context.getContext();
+    
+    context.registerGlobalVariable(decl.getName());
+    std::cout << "DEBUG codegenGlobalVariable: Registering global variable '" << decl.getName() << "'" << std::endl;
     
     auto varType = context.getLLVMType(decl.getType());
     if (!varType) {
@@ -464,7 +524,7 @@ llvm::Value* StatementCodeGen::codegenGlobalVariable(CodeGen& context, VariableD
                 );
                 
                 context.getNamedValues()[decl.getName()] = globalVar;
-                context.getVariableTypes()[decl.getName()] = decl.getType();
+                context.getVariableTypes()[decl.getName()] = VarType::MODULE;
                 
                 context.registerModuleAlias(decl.getName(), "std", globalVar);
                 
@@ -480,45 +540,53 @@ llvm::Value* StatementCodeGen::codegenGlobalVariable(CodeGen& context, VariableD
             }
         }
         else if (auto* memberAccess = dynamic_cast<MemberAccessExpr*>(decl.getValue().get())) {
-            if (auto* varExpr = dynamic_cast<VariableExpr*>(memberAccess->getObject().get())) {
-                std::string baseVarName = varExpr->getName();
-                std::string memberName = memberAccess->getMember();
-                
-                std::string actualModuleName = context.resolveModuleAlias(baseVarName);
-                if (!actualModuleName.empty()) {
-                    auto moduleType = context.getLLVMType(VarType::MODULE);
-                    initialValue = ConstantAggregateZero::get(moduleType);
+            std::cout << "DEBUG: Global variable initialized with member access: " << decl.getName() << std::endl;
+
+            try {
+                auto value = decl.getValue()->codegen(context);
+                if (llvm::isa<llvm::Constant>(value)) {
+                    std::cout << "DEBUG: Creating global variable with constant member access value" << std::endl;
                     
                     auto globalVar = new llvm::GlobalVariable(
                         module,
-                        moduleType,
+                        value->getType(),
                         decl.getIsConst(),
                         llvm::GlobalValue::ExternalLinkage,
-                        initialValue,
+                        llvm::cast<llvm::Constant>(value),
                         decl.getName()
                     );
                     
                     context.getNamedValues()[decl.getName()] = globalVar;
                     context.getVariableTypes()[decl.getName()] = VarType::MODULE;
                     
-                    context.registerModuleAlias(decl.getName(), memberName, globalVar);
+                    if (auto* varExpr = dynamic_cast<VariableExpr*>(memberAccess->getObject().get())) {
+                        std::string baseVarName = varExpr->getName();
+                        std::string memberName = memberAccess->getMember();
+                        
+                        std::string actualModuleName = context.resolveModuleAlias(baseVarName);
+                        if (!actualModuleName.empty()) {
+                            std::string targetModule = actualModuleName + "." + memberName;
+                            context.registerModuleAlias(decl.getName(), targetModule, globalVar);
+                            std::cout << "DEBUG: Registered module alias for " << decl.getName() 
+                                    << " -> " << targetModule << std::endl;
+                        }
+                    }
                     
-                    std::cout << "DEBUG: Created module member alias: " << decl.getName() 
-                              << " -> " << memberName << " (via " << baseVarName << " -> " 
-                              << actualModuleName << ")" << std::endl;
+                    std::cout << "DEBUG: Created global variable '" << decl.getName() << "' with type MODULE" << std::endl;
                     
                     if (decl.getIsConst()) {
                         context.getConstVariables().insert(decl.getName());
                     }
                     
                     return globalVar;
-                }
-                
-                auto baseVar = context.lookupVariable(baseVarName);
-                if (baseVar) {
-                    auto baseType = context.lookupVariableType(baseVarName);
-                    if (baseType == VarType::MODULE) {
-                        std::string actualModuleName = context.getModuleIdentity(baseVarName);
+                } else {
+                    std::cout << "DEBUG: Member access is not constant, creating module alias" << std::endl;
+                    
+                    if (auto* varExpr = dynamic_cast<VariableExpr*>(memberAccess->getObject().get())) {
+                        std::string baseVarName = varExpr->getName();
+                        std::string memberName = memberAccess->getMember();
+                        
+                        std::string actualModuleName = context.resolveModuleAlias(baseVarName);
                         if (!actualModuleName.empty()) {
                             auto moduleType = context.getLLVMType(VarType::MODULE);
                             initialValue = ConstantAggregateZero::get(moduleType);
@@ -535,11 +603,11 @@ llvm::Value* StatementCodeGen::codegenGlobalVariable(CodeGen& context, VariableD
                             context.getNamedValues()[decl.getName()] = globalVar;
                             context.getVariableTypes()[decl.getName()] = VarType::MODULE;
                             
-                            std::string targetModule = actualModuleName + "." + memberName;
-                            context.registerModuleAlias(decl.getName(), targetModule, globalVar);
+                            context.registerModuleAlias(decl.getName(), memberName, globalVar);
                             
                             std::cout << "DEBUG: Created module member alias: " << decl.getName() 
-                                      << " -> " << targetModule << std::endl;
+                                      << " -> " << memberName << " (via " << baseVarName << " -> " 
+                                      << actualModuleName << ")" << std::endl;
                             
                             if (decl.getIsConst()) {
                                 context.getConstVariables().insert(decl.getName());
@@ -547,28 +615,48 @@ llvm::Value* StatementCodeGen::codegenGlobalVariable(CodeGen& context, VariableD
                             
                             return globalVar;
                         }
+                        
+                        auto baseVar = context.lookupVariable(baseVarName);
+                        if (baseVar) {
+                            auto baseType = context.lookupVariableType(baseVarName);
+                            if (baseType == VarType::MODULE) {
+                                std::string actualModuleName = context.getModuleIdentity(baseVarName);
+                                if (!actualModuleName.empty()) {
+                                    auto moduleType = context.getLLVMType(VarType::MODULE);
+                                    initialValue = ConstantAggregateZero::get(moduleType);
+                                    
+                                    auto globalVar = new llvm::GlobalVariable(
+                                        module,
+                                        moduleType,
+                                        decl.getIsConst(),
+                                        llvm::GlobalValue::ExternalLinkage,
+                                        initialValue,
+                                        decl.getName()
+                                    );
+                                    
+                                    context.getNamedValues()[decl.getName()] = globalVar;
+                                    context.getVariableTypes()[decl.getName()] = VarType::MODULE;
+                                    
+                                    std::string targetModule = actualModuleName + "." + memberName;
+                                    context.registerModuleAlias(decl.getName(), targetModule, globalVar);
+                                    
+                                    std::cout << "DEBUG: Created module member alias: " << decl.getName() 
+                                              << " -> " << targetModule << std::endl;
+                                    
+                                    if (decl.getIsConst()) {
+                                        context.getConstVariables().insert(decl.getName());
+                                    }
+                                    
+                                    return globalVar;
+                                }
+                            }
+                        }
                     }
-                }
-            }
-
-            try {
-                auto value = decl.getValue()->codegen(context);
-                if (llvm::isa<llvm::Constant>(value)) {
-                    auto globalVar = new llvm::GlobalVariable(
-                        module,
-                        value->getType(),
-                        decl.getIsConst(),
-                        llvm::GlobalValue::InternalLinkage,
-                        llvm::cast<llvm::Constant>(value),
-                        decl.getName()
-                    );
-                    context.getNamedValues()[decl.getName()] = globalVar;
-                    context.getVariableTypes()[decl.getName()] = decl.getType();
-                    return globalVar;
-                } else {
-                    throw std::runtime_error("Global variables can only be initialized with constant expressions or module members");
+                    
+                    throw std::runtime_error("Global variables can only be initialized with constant expressions or valid module members");
                 }
             } catch (const std::exception& e) {
+                std::cout << "DEBUG: Error generating member access value: " << e.what() << std::endl;
                 throw std::runtime_error("Global variables can only be initialized with constant expressions or module members: " + std::string(e.what()));
             }
         }
@@ -641,7 +729,7 @@ llvm::Value* StatementCodeGen::codegenGlobalVariable(CodeGen& context, VariableD
                         module,
                         value->getType(),
                         decl.getIsConst(),
-                        llvm::GlobalValue::InternalLinkage,
+                        llvm::GlobalValue::ExternalLinkage,
                         llvm::cast<llvm::Constant>(value),
                         decl.getName()
                     );
@@ -697,15 +785,17 @@ llvm::Value* StatementCodeGen::codegenGlobalVariable(CodeGen& context, VariableD
         context.getConstVariables().insert(decl.getName());
     }
     
+    std::cout << "DEBUG: Created global variable '" << decl.getName() << "' with type " 
+              << static_cast<int>(decl.getType()) << std::endl;
+    
     return globalVar;
 }
-
 llvm::Value* StatementCodeGen::codegenProgram(CodeGen& context, Program& program) {
     auto& builder = context.getBuilder();
     auto& module = context.getModule();
     auto& llvmContext = context.getContext();
     
-    std::cout << "DEBUG: First pass - generating enum declarations" << std::endl;
+    std::cout << "DEBUG: First pass - generating enum and struct declarations" << std::endl;
     
     for (size_t i = 0; i < program.getStatements().size(); i++) {
         auto& stmt = program.getStatements()[i];
@@ -713,9 +803,13 @@ llvm::Value* StatementCodeGen::codegenProgram(CodeGen& context, Program& program
             std::cout << "DEBUG: Generating enum: " << enumDecl->getName() << std::endl;
             enumDecl->codegen(context);
         }
+        else if (auto* structDecl = dynamic_cast<StructDecl*>(stmt.get())) {
+            std::cout << "DEBUG: Generating struct: " << structDecl->getName() << std::endl;
+            structDecl->codegen(context);
+        }
     }
     
-    std::cout << "DEBUG: Second pass - generating global variables and functions" << std::endl;
+    std::cout << "DEBUG: Second pass - generating global variables" << std::endl;
 
     for (size_t i = 0; i < program.getStatements().size(); i++) {
         auto& stmt = program.getStatements()[i];
@@ -725,6 +819,8 @@ llvm::Value* StatementCodeGen::codegenProgram(CodeGen& context, Program& program
         }
     }
 
+    std::cout << "DEBUG: Third pass - generating functions" << std::endl;
+
     for (size_t i = 0; i < program.getStatements().size(); i++) {
         auto& stmt = program.getStatements()[i];
         if (auto* funcStmt = dynamic_cast<FunctionStmt*>(stmt.get())) {
@@ -733,6 +829,16 @@ llvm::Value* StatementCodeGen::codegenProgram(CodeGen& context, Program& program
         }
     }
     
+    std::cout << "DEBUG: Fourth pass - generating struct method bodies" << std::endl;
+
+    for (size_t i = 0; i < program.getStatements().size(); i++) {
+        auto& stmt = program.getStatements()[i];
+        if (auto* structDecl = dynamic_cast<StructDecl*>(stmt.get())) {
+            std::cout << "DEBUG: Generating method bodies for struct: " << structDecl->getName() << std::endl;
+            codegenStructMethodBodies(context, *structDecl);
+        }
+    }
+
     if (program.getHasEntryPoint()) {
         const std::string& entryPointName = program.getEntryPointFunction();
         std::cout << "DEBUG: Using entry point function: " << entryPointName << std::endl;
@@ -902,6 +1008,14 @@ llvm::Value* StatementCodeGen::codegenProgram(CodeGen& context, Program& program
                     continue;
                 }
                 
+                if (dynamic_cast<StructDecl*>(stmt.get())) {
+                    continue;
+                }
+                
+                if (dynamic_cast<EnumDecl*>(stmt.get())) {
+                    continue;
+                }
+                
                 if (builder.GetInsertBlock()->getTerminator()) {
                     break;
                 }
@@ -1061,6 +1175,7 @@ llvm::Value* StatementCodeGen::codegenIfStmt(CodeGen& context, IfStmt& stmt) {
     
     return nullptr;
 }
+
 llvm::Value* StatementCodeGen::codegenReturnStmt(CodeGen& context, ReturnStmt& stmt) {
     auto& builder = context.getBuilder();
     auto& llvmContext = context.getContext();
@@ -1179,6 +1294,7 @@ llvm::Value* StatementCodeGen::codegenReturnStmt(CodeGen& context, ReturnStmt& s
     
     return nullptr;
 }
+
 llvm::Value* StatementCodeGen::codegenWhileStmt(CodeGen& context, WhileStmt& stmt) {
     auto& builder = context.getBuilder();
     auto& llvmContext = context.getContext();
@@ -1522,4 +1638,195 @@ llvm::Value* StatementCodeGen::addRuntimeBoundsChecking(CodeGen& context, llvm::
     builder.SetInsertPoint(continueBlock);
     
     return value;
+}
+llvm::Value* StatementCodeGen::codegenStructDecl(CodeGen& context, StructDecl& decl) {
+    auto& llvmContext = context.getContext();
+    auto& module = context.getModule();
+    
+    std::string structName = decl.getName();
+    std::cout << "DEBUG codegenStructDecl: Generating struct '" << structName << "' with " 
+              << decl.getFields().size() << " fields and " << decl.getMethods().size() 
+              << " methods" << std::endl;
+    
+    std::vector<llvm::Type*> fieldTypes;
+    for (const auto& field : decl.getFields()) {
+        llvm::Type* fieldType;
+        if (field.second == AST::VarType::STRUCT) {
+            fieldType = context.getStructType(field.first);
+            if (!fieldType) {
+                throw std::runtime_error("Unknown struct type for field: " + field.first);
+            }
+        } else {
+            fieldType = context.getLLVMType(field.second);
+        }
+        
+        if (!fieldType) {
+            throw std::runtime_error("Unknown field type in struct '" + structName + "' for field: " + field.first);
+        }
+        fieldTypes.push_back(fieldType);
+        std::cout << "DEBUG: Field '" << field.first << "' type: " << static_cast<int>(field.second) << std::endl;
+    }
+    
+    llvm::StructType* structType = llvm::StructType::create(llvmContext, fieldTypes, structName);
+    
+    context.registerStructType(structName, structType, decl.getFields());
+    
+    std::cout << "DEBUG: Registered struct type '" << structName << "' with " << fieldTypes.size() << " fields" << std::endl;
+
+    for (const auto& method : decl.getMethods()) {
+        std::cout << "DEBUG: Generating method declaration for '" << method->getName() << "' for struct '" << structName << "'" << std::endl;
+
+        std::string mangledName = structName + "." + method->getName();
+        
+        std::vector<llvm::Type*> paramTypes;
+        
+        paramTypes.push_back(llvm::PointerType::get(structType, 0));
+        
+        const auto& params = method->getParameters();
+        size_t startIndex = 0;
+        if (!params.empty() && params[0].first == "self") {
+            startIndex = 1;
+        }
+        
+        for (size_t i = startIndex; i < params.size(); ++i) {
+            const auto& param = params[i];
+            auto paramType = context.getLLVMType(param.second);
+            if (!paramType) {
+                throw std::runtime_error("Unknown parameter type for method parameter: " + param.first);
+            }
+            paramTypes.push_back(paramType);
+        }
+        
+        auto returnType = context.getLLVMType(method->getReturnType());
+        if (!returnType) {
+            throw std::runtime_error("Unknown return type for method: " + method->getName());
+        }
+        
+        auto funcType = llvm::FunctionType::get(returnType, paramTypes, false);
+        
+        auto function = llvm::Function::Create(
+            funcType,
+            llvm::Function::ExternalLinkage,
+            mangledName,
+            &module
+        );
+
+        unsigned argIdx = 0;
+        for (auto& arg : function->args()) {
+            if (argIdx == 0) {
+                arg.setName("self");
+            } else {
+                size_t paramIndex;
+                if (startIndex == 1) {
+                    paramIndex = argIdx;
+                } else {
+                    paramIndex = argIdx - 1;
+                }
+                
+                if (paramIndex < params.size()) {
+                    std::string paramName = params[paramIndex].first;
+                    arg.setName(paramName);
+                }
+            }
+            argIdx++;
+        }
+        
+        std::cout << "DEBUG: Created method declaration for '" << mangledName << "'" << std::endl;
+    }
+    
+    std::cout << "DEBUG: Successfully generated struct '" << structName << "' type definition" << std::endl;
+    return nullptr;
+}
+
+void StatementCodeGen::codegenStructMethodBodies(CodeGen& context, StructDecl& decl) {
+    auto& llvmContext = context.getContext();
+    auto& module = context.getModule();
+    
+    std::string structName = decl.getName();
+    llvm::StructType* structType = llvm::cast<llvm::StructType>(context.getStructType(structName));
+    
+    std::cout << "DEBUG codegenStructMethodBodies: Generating method bodies for struct '" << structName << "'" << std::endl;
+    
+    for (const auto& method : decl.getMethods()) {
+        std::string mangledName = structName + "." + method->getName();
+        auto function = module.getFunction(mangledName);
+        
+        if (!function) {
+            throw std::runtime_error("Method declaration not found: " + mangledName);
+        }
+        
+        if (method->getBody()) {
+            std::cout << "DEBUG: Generating method body for '" << mangledName << "'" << std::endl;
+            
+            auto& builder = context.getBuilder();
+            llvm::BasicBlock* savedInsertBlock = builder.GetInsertBlock();
+            
+            auto savedNamedValues = context.getNamedValues();
+            auto savedVariableTypes = context.getVariableTypes();
+            
+            context.enterScope();
+            
+            std::cout << "DEBUG: Copying global variables into method scope for '" << mangledName << "':" << std::endl;
+            for (const auto& [varName, varValue] : savedNamedValues) {
+                if (context.isGlobalVariable(varName)) {
+                    context.getNamedValues()[varName] = varValue;
+                    auto it = savedVariableTypes.find(varName);
+                    if (it != savedVariableTypes.end()) {
+                        context.getVariableTypes()[varName] = it->second;
+                    }
+                    std::cout << "  - Copied global: " << varName << std::endl;
+                }
+            }
+            
+            auto entryBlock = llvm::BasicBlock::Create(llvmContext, "entry", function);
+            builder.SetInsertPoint(entryBlock);
+            
+            std::cout << "DEBUG: In method '" << mangledName << "', available variables in scope:" << std::endl;
+            auto& currentNamedValues = context.getNamedValues();
+            for (const auto& var : currentNamedValues) {
+                std::cout << "  - " << var.first;
+                if (context.isGlobalVariable(var.first)) {
+                    std::cout << " (global)";
+                }
+                std::cout << std::endl;
+            }
+
+            unsigned idx = 0;
+            for (auto& arg : function->args()) {
+                if (idx == 0) {
+                    context.getNamedValues()["self"] = &arg;
+                    context.getVariableTypes()["self"] = VarType::STRUCT;
+                    context.setVariableStructName("self", structName);
+                } else {
+                    std::string paramName = arg.getName().str();
+                    auto alloca = builder.CreateAlloca(arg.getType(), nullptr, paramName);
+                    builder.CreateStore(&arg, alloca);
+                    context.getNamedValues()[paramName] = alloca;
+                }
+                idx++;
+            }
+            
+            method->getBody()->codegen(context);
+            
+            auto currentBlock = builder.GetInsertBlock();
+            if (!currentBlock->getTerminator()) {
+                if (method->getReturnType() == VarType::VOID) {
+                    builder.CreateRetVoid();
+                } else {
+                    throw std::runtime_error("Method must return a value");
+                }
+            }
+            
+            if (llvm::verifyFunction(*function, &llvm::errs())) {
+                function->print(llvm::errs());
+                throw std::runtime_error("Method failed verification");
+            }
+            
+            context.exitScope();
+            
+            if (savedInsertBlock) {
+                builder.SetInsertPoint(savedInsertBlock);
+            }
+        }
+    }
 }

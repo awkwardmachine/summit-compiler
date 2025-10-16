@@ -17,6 +17,7 @@ namespace ExpressionCodeGen {
     llvm::Value* codegenModule(CodeGen& context, AST::ModuleExpr& expr);
     llvm::Value* codegenMemberAccess(CodeGen& context, AST::MemberAccessExpr& expr);
     llvm::Value* codegenEnumValue(CodeGen& context, AST::EnumValueExpr& expr);
+    llvm::Value* codegenStructLiteral(CodeGen& context, AST::StructLiteralExpr& expr);
     std::string extractModuleName(CodeGen& context, const std::string& varName);
     llvm::Value* handleModuleMemberAccess(CodeGen& context, const std::string& moduleName, const std::string& member);
 

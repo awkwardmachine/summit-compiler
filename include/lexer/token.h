@@ -7,7 +7,7 @@ enum class TokenType {
     VAR, CONST, AS, BOOL, TRUE, FALSE,
     THEN, ELSE, ELSEIF, END, IF, AND, OR, NOT,
     FUNC, RETURN, ENTRYPOINT, WHILE, FOR, DO,
-    ENUM, STOP, NEXT,
+    ENUM, STOP, NEXT, STRUCT,
     
     // Integer types
     INT4, INT8, INT12, INT16, INT24, INT32, INT48, INT64,

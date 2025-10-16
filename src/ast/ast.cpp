@@ -107,3 +107,10 @@ llvm::Value* ContinueStmt::codegen(::CodeGen& context) {
 llvm::Value* BreakStmt::codegen(::CodeGen& context) {
     return context.codegen(*this);
 }
+
+llvm::Value* StructDecl::codegen(::CodeGen& context) {
+    return context.codegen(*this);
+}
+llvm::Value* StructLiteralExpr::codegen(::CodeGen& context) {
+    return context.codegen(*this);
+}

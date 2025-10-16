@@ -29,7 +29,18 @@ CodeGen::CodeGen() {
 }
 
 /* Convert AST types to LLVM types */
-llvm::Type* CodeGen::getLLVMType(AST::VarType type) {
+llvm::Type* CodeGen::getLLVMType(AST::VarType type, const std::string& structName) {
+    if (type == AST::VarType::STRUCT) {
+        if (structName.empty()) {
+            throw std::runtime_error("Struct type requires a struct name");
+        }
+        auto structType = getStructType(structName);
+        if (!structType) {
+            throw std::runtime_error("Unknown struct type: " + structName);
+        }
+        return structType;
+    }
+
     auto& context = getContext();
     switch (type) {
         case AST::VarType::BOOL: return Type::getInt1Ty(context);
@@ -59,14 +70,55 @@ llvm::Type* CodeGen::getLLVMType(AST::VarType type) {
         default: throw std::runtime_error("Unknown type");
     }
 }
-
 /* Enter a new scope */
 void CodeGen::enterScope() {
-    namedValuesStack.push_back({});
-    variableTypesStack.push_back({});
-    constVariablesStack.push_back({});
+    // Create new scope but copy globals from ALL previous scopes
+    std::unordered_map<std::string, llvm::Value*> newNamedValues;
+    std::unordered_map<std::string, AST::VarType> newVariableTypes;
+    std::unordered_set<std::string> newConstVariables;
+    
+    // Always copy ALL global variables to every new scope
+    for (const auto& globalName : globalVariables) {
+        // Try to find the global variable in any existing scope
+        for (auto it = namedValuesStack.rbegin(); it != namedValuesStack.rend(); ++it) {
+            auto found = it->find(globalName);
+            if (found != it->end()) {
+                newNamedValues[globalName] = found->second;
+                break;
+            }
+        }
+        
+        // Try to find the type in any existing scope
+        for (auto it = variableTypesStack.rbegin(); it != variableTypesStack.rend(); ++it) {
+            auto found = it->find(globalName);
+            if (found != it->end()) {
+                newVariableTypes[globalName] = found->second;
+                break;
+            }
+        }
+        
+        // Check if it's const in any existing scope
+        for (auto it = constVariablesStack.rbegin(); it != constVariablesStack.rend(); ++it) {
+            if (it->find(globalName) != it->end()) {
+                newConstVariables.insert(globalName);
+                break;
+            }
+        }
+        
+        std::cout << "DEBUG enterScope: Carrying over global '" << globalName << "' to new scope" << std::endl;
+    }
+    
+    std::cout << "DEBUG enterScope: Carried " << newNamedValues.size() << " global variables to new scope" << std::endl;
+    
+    namedValuesStack.push_back(newNamedValues);
+    variableTypesStack.push_back(newVariableTypes);
+    constVariablesStack.push_back(newConstVariables);
+    
+    std::cout << "DEBUG enterScope: Created new scope with " << newNamedValues.size() 
+              << " total variables" << std::endl;
 }
 
+/* Exit current scope */
 /* Exit current scope */
 void CodeGen::exitScope() {
     if (!namedValuesStack.empty()) {
@@ -75,7 +127,6 @@ void CodeGen::exitScope() {
         constVariablesStack.pop_back();
     }
 }
-
 /* Get variables in current scope */
 std::unordered_map<std::string, llvm::Value*>& CodeGen::getNamedValues() {
     if (namedValuesStack.empty()) throw std::runtime_error("No active scope");
@@ -118,6 +169,45 @@ bool CodeGen::isVariableConst(const std::string& name) {
         if (it->find(name) != it->end()) return true;
     }
     return false;
+}
+
+void CodeGen::registerStructType(const std::string& name, llvm::StructType* type, 
+                                const std::vector<std::pair<std::string, AST::VarType>>& fields) {
+    structTypes[name] = type;
+    
+    // Track field indices
+    auto& fieldMap = structFieldIndices[name];
+    for (size_t i = 0; i < fields.size(); i++) {
+        fieldMap[fields[i].first] = i;
+    }
+}
+
+int CodeGen::getStructFieldIndex(const std::string& structName, const std::string& fieldName) {
+    auto structIt = structFieldIndices.find(structName);
+    if (structIt == structFieldIndices.end()) {
+        return -1;
+    }
+    
+    auto fieldIt = structIt->second.find(fieldName);
+    if (fieldIt == structIt->second.end()) {
+        return -1;
+    }
+    
+    return fieldIt->second;
+}
+
+llvm::Type* CodeGen::getStructType(const std::string& name) {
+    // First, check if we've already created this struct type
+    auto it = structTypes.find(name);
+    if (it != structTypes.end()) {
+        return it->second;
+    }
+    
+    // If not found, create a placeholder opaque struct
+    // The actual definition will be filled in when the struct is defined
+    llvm::StructType* structType = llvm::StructType::create(getContext(), name);  // FIXED: use getContext()
+    structTypes[name] = structType;
+    return structType;
 }
 
 /* Create builtin functions */
@@ -212,6 +302,14 @@ llvm::Value* CodeGen::codegen(AST::BreakStmt& expr) {
 
 llvm::Value* CodeGen::codegen(AST::ContinueStmt& expr) {
     return StatementCodeGen::codegenContinueStmt(*this, expr);
+}
+
+llvm::Value* CodeGen::codegen(AST::StructDecl& expr) {
+    return StatementCodeGen::codegenStructDecl(*this, expr);
+}
+
+llvm::Value* CodeGen::codegen(AST::StructLiteralExpr& expr) {
+    return ExpressionCodeGen::codegenStructLiteral(*this, expr);
 }
 
 void CodeGen::registerModuleAlias(const std::string& alias, const std::string& actualModuleName, llvm::Value* moduleValue) {

@@ -154,6 +154,8 @@ int main(int argc, char* argv[]) {
         }
 
         CodeGen codegen;
+
+        codegen.setGlobalVariables(parser.getGlobalVariables());
         
         if (!noStdlib) {
             StdLibManager::getInstance().initializeStandardLibrary(!noStdlib);

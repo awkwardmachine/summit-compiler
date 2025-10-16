@@ -14,6 +14,10 @@
 
 #include "ast/ast_types.h"
 
+namespace llvm {
+    class StructType;
+}
+
 namespace AST {
     enum class VarType;
     class NumberExpr;
@@ -42,6 +46,8 @@ namespace AST {
     class BreakStmt;
     class ContinueStmt;
     class Program;
+    class StructDecl;
+    class StructLiteralExpr;
 }
 
 class CodeGen {
@@ -56,7 +62,12 @@ class CodeGen {
     std::map<std::string, llvm::Value*> moduleReferences;
     std::map<std::string, std::string> moduleIdentities;
     std::map<std::string, std::string> moduleAliases;
-    std::unordered_map<std::string, llvm::Value*> moduleReferencesMap;
+    
+    std::unordered_map<std::string, llvm::StructType*> structTypes;
+    std::unordered_map<std::string, std::unordered_map<std::string, int>> structFieldIndices;
+    std::map<std::string, std::string> variableStructNames;
+    std::unordered_set<std::string> globalVariables;
+    
 public:
     CodeGen();
     
@@ -64,6 +75,46 @@ public:
     llvm::LLVMContext& getContext() { return *llvmContext; }
     llvm::IRBuilder<>& getBuilder() { return *irBuilder; }
     llvm::Module& getModule() { return *llvmModule; }
+
+    void registerGlobalVariable(const std::string& name) {
+        globalVariables.insert(name);
+    }
+    
+    void setGlobalVariables(const std::unordered_set<std::string>& globals) {
+        globalVariables = globals;
+        std::cout << "DEBUG: Set " << globalVariables.size() << " global variables in codegen" << std::endl;
+        for (const auto& global : globalVariables) {
+            std::cout << "DEBUG: Global variable: " << global << std::endl;
+        }
+    }
+    
+    bool isGlobalVariable(const std::string& name) const {
+        return globalVariables.count(name) > 0;
+    }
+    
+
+    /* Struct type management */
+    void registerStructType(const std::string& name, llvm::StructType* type, 
+                           const std::vector<std::pair<std::string, AST::VarType>>& fields);
+    int getStructFieldIndex(const std::string& structName, const std::string& fieldName);
+    llvm::Type* getStructType(const std::string& name);
+    
+    /* Type conversion */
+    llvm::Type* getLLVMType(AST::VarType type, const std::string& structName = "");
+
+    void setVariableStructName(const std::string& varName, const std::string& structName) {
+        variableStructNames[varName] = structName;
+        std::cout << "DEBUG: Set variable '" << varName << "' to struct '" << structName << "'" << std::endl;
+    }
+
+    std::string getVariableStructName(const std::string& varName) const {
+        auto it = variableStructNames.find(varName);
+        if (it != variableStructNames.end()) {
+            return it->second;
+        }
+        return "";
+    }
+    
     
     /* Scope management methods */
     void enterScope();
@@ -82,7 +133,6 @@ public:
     bool isVariableConst(const std::string& name);
     
     /* Type conversion and utility methods */
-    llvm::Type* getLLVMType(AST::VarType type);
     bool isConstVariable(const std::string& name) { return isVariableConst(name); }
     
     /* Builtin function creation */
@@ -102,6 +152,7 @@ public:
     llvm::Value* codegen(AST::ModuleExpr& expr);
     llvm::Value* codegen(AST::MemberAccessExpr& expr);
     llvm::Value* codegen(AST::EnumValueExpr& expr);
+    llvm::Value* codegen(AST::StructLiteralExpr& expr);
     
     /* Statement code generation methods */
     llvm::Value* codegen(AST::VariableDecl& decl);
@@ -116,6 +167,7 @@ public:
     llvm::Value* codegen(AST::EnumDecl& expr);
     llvm::Value* codegen(AST::BreakStmt& expr);
     llvm::Value* codegen(AST::ContinueStmt& expr);
+    llvm::Value* codegen(AST::StructDecl& expr);
     llvm::Value* codegen(AST::Program& program);
     
     /* Debugging and output methods */
@@ -176,6 +228,7 @@ public:
         if (loopContinueBlocks.empty()) return nullptr;
         return loopContinueBlocks.back();
     }
+
 private:
     std::string currentTargetType;
     std::vector<llvm::BasicBlock*> loopExitBlocks;

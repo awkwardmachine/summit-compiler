@@ -6,6 +6,7 @@
 #include "stdlib/core/stdlib_manager.h"
 
 #include <llvm/IR/Verifier.h>
+#include <llvm/IR/Type.h>
 #include <iostream>
 #include <regex>
 #include <vector>
@@ -113,36 +114,50 @@ llvm::Value* ExpressionCodeGen::codegenFloat(CodeGen& context, FloatExpr& expr) 
     }
 }
 llvm::Value* ExpressionCodeGen::codegenVariable(CodeGen& context, VariableExpr& expr) {
-    auto var = context.lookupVariable(expr.getName());
+    std::string name = expr.getName();
+    
+    std::cout << "DEBUG codegenVariable: Looking for variable '" << name << "'" << std::endl;
+    
+    auto var = context.lookupVariable(name);
     if (!var) {
-        throw std::runtime_error("Unknown variable: " + expr.getName());
+        throw std::runtime_error("Unknown variable: " + name);
     }
     
-    auto varType = context.lookupVariableType(expr.getName());
+    std::cout << "DEBUG codegenVariable: Found variable '" << name << "' with value " << var << std::endl;
     
-    std::cout << "DEBUG codegenVariable: " << expr.getName() 
-              << " type = " << static_cast<int>(varType) << std::endl;
-    
-    auto& builder = context.getBuilder();
+    VarType varType = context.lookupVariableType(name);
+    std::cout << "DEBUG codegenVariable: Variable type = " << static_cast<int>(varType) << std::endl;
 
     if (varType == VarType::MODULE) {
-        std::cout << "DEBUG: Returning module pointer directly for: " << expr.getName() << std::endl;
+        std::cout << "DEBUG codegenVariable: Returning module reference without loading for: " << name << std::endl;
         return var;
     }
     
-    llvm::Type* loadType = context.getLLVMType(varType);
-    if (!loadType) {
-        throw std::runtime_error("Unknown variable type for: " + expr.getName());
+    auto& builder = context.getBuilder();
+    
+    std::cout << "DEBUG codegenVariable: Loading value from pointer for: " << name << std::endl;
+    
+    llvm::Type* pointedType = nullptr;
+    if (auto* allocaInst = llvm::dyn_cast<llvm::AllocaInst>(var)) {
+        pointedType = allocaInst->getAllocatedType();
+    } else if (auto* globalVar = llvm::dyn_cast<llvm::GlobalVariable>(var)) {
+        pointedType = globalVar->getValueType();
     }
     
-    std::cout << "DEBUG: Load type = ";
-    loadType->print(llvm::errs());
-    std::cout << std::endl;
-
-    llvm::Value* loadedValue = builder.CreateLoad(loadType, var, expr.getName().c_str());
+    if (pointedType) {
+        std::string typeStr;
+        llvm::raw_string_ostream rso(typeStr);
+        pointedType->print(rso);
+        std::cout << "DEBUG codegenVariable: Pointed type = " << rso.str() << std::endl;
+    }
     
-    return loadedValue;
+    if (!pointedType) {
+        throw std::runtime_error("Unable to determine type for variable: " + name);
+    }
+    
+    return builder.CreateLoad(pointedType, var, name);
 }
+
 llvm::Value* ExpressionCodeGen::codegenUnary(CodeGen& context, UnaryExpr& expr) {
     auto& builder = context.getBuilder();
     auto operand = expr.getOperand()->codegen(context);
@@ -425,6 +440,7 @@ llvm::Value* ExpressionCodeGen::codegenBinary(CodeGen& context, BinaryExpr& expr
         default: throw std::runtime_error("Unknown binary operator");
     }
 }
+
 llvm::Value* ExpressionCodeGen::codegenCall(CodeGen& context, CallExpr& expr) {
     auto& module = context.getModule();
     auto& builder = context.getBuilder();
@@ -437,6 +453,58 @@ llvm::Value* ExpressionCodeGen::codegenCall(CodeGen& context, CallExpr& expr) {
               << "' with " << expr.getArgs().size() << " args\n";
 
     if (expr.getCalleeExpr()) {
+        if (auto* memberAccess = dynamic_cast<MemberAccessExpr*>(expr.getCalleeExpr().get())) {
+            std::cout << "DEBUG: Detected method call via member access" << std::endl;
+            
+            auto* object = memberAccess->getObject().get();
+            const std::string& methodName = memberAccess->getMember();
+            
+            llvm::Value* selfPtr = nullptr;
+            std::string structName;
+            
+            if (auto* varExpr = dynamic_cast<VariableExpr*>(object)) {
+                std::string varName = varExpr->getName();
+                auto varType = context.lookupVariableType(varName);
+                
+                if (varType == VarType::STRUCT) {
+                    selfPtr = context.lookupVariable(varName);
+                    
+                    if (auto* alloca = llvm::dyn_cast<llvm::AllocaInst>(selfPtr)) {
+                        llvm::Type* allocatedType = alloca->getAllocatedType();
+                        if (allocatedType->isStructTy()) {
+                            llvm::StructType* structType = llvm::cast<llvm::StructType>(allocatedType);
+                            structName = structType->getName().str();
+                        }
+                    } else if (auto* globalVar = llvm::dyn_cast<llvm::GlobalVariable>(selfPtr)) {
+                        llvm::Type* valueType = globalVar->getValueType();
+                        if (valueType->isStructTy()) {
+                            llvm::StructType* structType = llvm::cast<llvm::StructType>(valueType);
+                            structName = structType->getName().str();
+                        }
+                    }
+                }
+            }
+            
+            if (!structName.empty() && selfPtr) {
+                std::string mangledMethodName = structName + "." + methodName;
+                auto methodFunc = module.getFunction(mangledMethodName);
+                
+                if (methodFunc) {
+                    std::cout << "DEBUG: Calling method '" << mangledMethodName << "'" << std::endl;
+                    
+                    std::vector<llvm::Value*> args;
+                    args.push_back(selfPtr);
+                    
+                    for (auto& argExpr : expr.getArgs()) {
+                        auto argValue = argExpr->codegen(context);
+                        args.push_back(argValue);
+                    }
+                    
+                    return builder.CreateCall(methodFunc, args);
+                }
+            }
+        }
+        
         auto calleeValue = expr.getCalleeExpr()->codegen(context);
         
         bool isMathFunction = false;
@@ -477,9 +545,6 @@ llvm::Value* ExpressionCodeGen::codegenCall(CodeGen& context, CallExpr& expr) {
                         if (expectedType->isFloatTy() && argValue->getType()->isIntegerTy()) {
                             std::cout << "DEBUG: Converting integer to float for math function argument" << std::endl;
                             argValue = builder.CreateSIToFP(argValue, Type::getFloatTy(llvmContext));
-                        }
-                        else if (expectedType->isFloatTy() && argValue->getType()->isDoubleTy()) {
-                            argValue = builder.CreateFPTrunc(argValue, Type::getFloatTy(llvmContext));
                         }
                         else if (expectedType->isFloatTy() && argValue->getType()->isDoubleTy()) {
                             argValue = builder.CreateFPTrunc(argValue, Type::getFloatTy(llvmContext));
@@ -944,18 +1009,121 @@ llvm::Value* ExpressionCodeGen::codegenModule(CodeGen& context, ModuleExpr& expr
 }
 
 llvm::Value* ExpressionCodeGen::codegenMemberAccess(CodeGen& context, MemberAccessExpr& expr) {
-    auto object = expr.getObject()->codegen(context);
     const std::string& member = expr.getMember();
+
+    std::cout << "DEBUG codegenMemberAccess: Accessing member '" << member << "'" << std::endl;
 
     if (auto* varExpr = dynamic_cast<AST::VariableExpr*>(expr.getObject().get())) {
         std::string varName = varExpr->getName();
+        auto varType = context.lookupVariableType(varName);
         
+        std::cout << "DEBUG: Member access on variable '" << varName << "' with type " << static_cast<int>(varType) << std::endl;
+        
+        if (varType == AST::VarType::STRUCT) {
+            auto var = context.lookupVariable(varName);
+            if (!var) {
+                throw std::runtime_error("Unknown variable: " + varName);
+            }
+            
+            std::string structName;
+            llvm::StructType* structType = nullptr;
+            
+            if (auto* arg = llvm::dyn_cast<llvm::Argument>(var)) {
+                structName = context.getVariableStructName(varName);
+                
+                if (!structName.empty()) {
+                    structType = llvm::dyn_cast<llvm::StructType>(context.getStructType(structName));
+                }
+                
+                if (!structType) {
+                    throw std::runtime_error("Could not determine struct type for parameter: " + varName);
+                }
+                
+                std::cout << "DEBUG: Function parameter struct member access on struct '" << structName << "'" << std::endl;
+                
+                int fieldIndex = context.getStructFieldIndex(structName, member);
+                if (fieldIndex != -1) {
+                    auto& builder = context.getBuilder();
+                    
+                    llvm::Value* fieldPtr = builder.CreateStructGEP(
+                        structType, 
+                        var,
+                        fieldIndex, 
+                        member
+                    );
+
+                    llvm::Type* fieldType = structType->getElementType(fieldIndex);
+                    
+                    return builder.CreateLoad(fieldType, fieldPtr, member);
+                }
+                
+                std::string methodName = structName + "." + member;
+                auto methodFunc = context.getModule().getFunction(methodName);
+                if (methodFunc) {
+                    return methodFunc;
+                }
+                
+                throw std::runtime_error("Unknown field or method '" + member + "' in struct '" + structName + "'");
+            }
+            else if (auto* alloca = llvm::dyn_cast<llvm::AllocaInst>(var)) {
+                llvm::Type* allocatedType = alloca->getAllocatedType();
+                if (allocatedType->isStructTy()) {
+                    structType = llvm::cast<llvm::StructType>(allocatedType);
+                    structName = structType->getName().str();
+                    
+                    std::cout << "DEBUG: Struct member access on struct '" << structName << "'" << std::endl;
+                    
+                    int fieldIndex = context.getStructFieldIndex(structName, member);
+                    if (fieldIndex != -1) {
+                        auto& builder = context.getBuilder();
+                        
+                        llvm::Value* fieldPtr = builder.CreateStructGEP(structType, var, fieldIndex, member);
+                        llvm::Type* fieldType = structType->getElementType(fieldIndex);
+                        return builder.CreateLoad(fieldType, fieldPtr, member);
+                    }
+                    
+                    std::string methodName = structName + "." + member;
+                    auto methodFunc = context.getModule().getFunction(methodName);
+                    if (methodFunc) {
+                        return methodFunc;
+                    }
+                    
+                    throw std::runtime_error("Unknown field or method '" + member + "' in struct '" + structName + "'");
+                }
+            }
+            else if (auto* globalVar = llvm::dyn_cast<llvm::GlobalVariable>(var)) {
+                llvm::Type* valueType = globalVar->getValueType();
+                if (valueType->isStructTy()) {
+                    structType = llvm::cast<llvm::StructType>(valueType);
+                    structName = structType->getName().str();
+                    
+                    std::cout << "DEBUG: Global struct member access on struct '" << structName << "'" << std::endl;
+
+                    int fieldIndex = context.getStructFieldIndex(structName, member);
+                    if (fieldIndex != -1) {
+                        auto& builder = context.getBuilder();
+                        
+                        llvm::Value* fieldPtr = builder.CreateStructGEP(structType, var, fieldIndex, member);
+                        llvm::Type* fieldType = structType->getElementType(fieldIndex);
+                        return builder.CreateLoad(fieldType, fieldPtr, member);
+                    }
+                    
+                    std::string methodName = structName + "." + member;
+                    auto methodFunc = context.getModule().getFunction(methodName);
+                    if (methodFunc) {
+                        return methodFunc;
+                    }
+                    
+                    throw std::runtime_error("Unknown field or method '" + member + "' in struct '" + structName + "'");
+                }
+            }
+        }
+
         std::string actualModuleName = context.resolveModuleAlias(varName);
         if (!actualModuleName.empty()) {
             return handleModuleMemberAccess(context, actualModuleName, member);
         }
         
-        auto varType = context.lookupVariableType(varName);
         if (varType == AST::VarType::MODULE) {
             std::string resolvedName = context.getModuleIdentity(varName);
             if (!resolvedName.empty()) {
@@ -963,6 +1131,30 @@ llvm::Value* ExpressionCodeGen::codegenMemberAccess(CodeGen& context, MemberAcce
             }
             return handleModuleMemberAccess(context, varName, member);
         }
+    }
+
+    auto object = expr.getObject()->codegen(context);
+
+    if (object->getType()->isStructTy()) {
+        llvm::StructType* structType = llvm::cast<llvm::StructType>(object->getType());
+        std::string structName = structType->getName().str();
+        
+        std::cout << "DEBUG: Loaded struct value member access on struct '" << structName << "'" << std::endl;
+        
+        int fieldIndex = context.getStructFieldIndex(structName, member);
+        if (fieldIndex != -1) {
+            auto& builder = context.getBuilder();
+            
+            return builder.CreateExtractValue(object, fieldIndex, member);
+        }
+        
+        std::string methodName = structName + "." + member;
+        auto methodFunc = context.getModule().getFunction(methodName);
+        if (methodFunc) {
+            return methodFunc;
+        }
+        
+        throw std::runtime_error("Unknown field or method '" + member + "' in struct '" + structName + "'");
     }
     
     if (auto* globalVar = llvm::dyn_cast<llvm::GlobalVariable>(object)) {
@@ -1004,19 +1196,26 @@ std::string ExpressionCodeGen::extractModuleName(CodeGen& context, const std::st
 llvm::Value* ExpressionCodeGen::handleModuleMemberAccess(CodeGen& context, const std::string& moduleName, const std::string& member) {
     std::string actualModuleName = moduleName;
 
-    size_t dotPos = actualModuleName.find('.');
-    if (dotPos != std::string::npos) {
-        actualModuleName = actualModuleName.substr(0, dotPos);
-    }
-
     auto& manager = StdLibManager::getInstance();
+    
     auto moduleHandler = manager.findModuleHandler(actualModuleName);
+    
+    if (!moduleHandler) {
+        size_t lastDotPos = actualModuleName.find_last_of('.');
+        if (lastDotPos != std::string::npos) {
+            std::string shortName = actualModuleName.substr(lastDotPos + 1);
+            moduleHandler = manager.findModuleHandler(shortName);
+            if (moduleHandler) {
+                actualModuleName = shortName;
+            }
+        }
+    }
     
     if (moduleHandler) {
         return moduleHandler->getMember(context, actualModuleName, member);
     }
     
-    throw std::runtime_error("Unknown member '" + member + "' in module '" + actualModuleName + "'");
+    throw std::runtime_error("Unknown member '" + member + "' in module '" + moduleName + "'");
 }
 
 llvm::Value* ExpressionCodeGen::codegenEnumValue(CodeGen& context, EnumValueExpr& expr) {
@@ -1029,4 +1228,37 @@ llvm::Value* ExpressionCodeGen::codegenEnumValue(CodeGen& context, EnumValueExpr
     
     auto& builder = context.getBuilder();
     return builder.CreateLoad(builder.getInt32Ty(), enumValue, fullName.c_str());
+}
+llvm::Value* ExpressionCodeGen::codegenStructLiteral(CodeGen& context, StructLiteralExpr& expr) {
+    auto& builder = context.getBuilder();
+    auto& llvmContext = context.getContext();
+    
+    std::string structName = expr.getStructName();
+    llvm::Type* structType = context.getStructType(structName);
+    if (!structType) {
+        throw std::runtime_error("Unknown struct type: " + structName);
+    }
+    
+    if (!structType->isStructTy()) {
+        throw std::runtime_error("Expected struct type for: " + structName);
+    }
+    llvm::StructType* structTy = llvm::cast<llvm::StructType>(structType);
+    
+    llvm::AllocaInst* alloca = builder.CreateAlloca(structTy, nullptr, structName + "_tmp");
+    
+    for (const auto& field : expr.getFields()) {
+        const std::string& fieldName = field.first;
+        auto fieldValue = field.second->codegen(context);
+        
+        int fieldIndex = context.getStructFieldIndex(structName, fieldName);
+        if (fieldIndex == -1) {
+            throw std::runtime_error("Unknown field '" + fieldName + "' in struct '" + structName + "'");
+        }
+        
+        llvm::Value* fieldPtr = builder.CreateStructGEP(structTy, alloca, fieldIndex, fieldName);
+        
+        builder.CreateStore(fieldValue, fieldPtr);
+    }
+    
+    return builder.CreateLoad(structTy, alloca, structName + "_val");
 }

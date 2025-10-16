@@ -4,8 +4,11 @@
 using namespace std;
 using namespace AST;
 
-Parser::Parser(vector<Token> tokens, const string& source)
-    : tokens(tokens), current(0), source(source) {}
+Parser::Parser(std::vector<Token> tokens, const std::string& source) 
+    : tokens(std::move(tokens)), current(0), source(source), inGlobalScope(true) {
+    // Initialize with global scope
+    currentScope.push_back("global");
+}
 
 const Token& Parser::peek() { return tokens[current]; }
 const Token& Parser::advance() { if (!isAtEnd()) current++; return tokens[current - 1]; }
@@ -37,6 +40,18 @@ void Parser::errorAt(const Token& tok, const string& msg) {
 }
 
 AST::VarType Parser::parseType() {
+    if (match(TokenType::IDENTIFIER)) {
+        string typeName = tokens[current - 1].value;
+        
+        // Check if it's a struct type
+        if (isStructType(typeName)) {
+            return VarType::STRUCT;
+        }
+        
+        // If it's not a struct, it's an unknown type
+        error("Unknown type: " + typeName);
+    }
+
     if (match(TokenType::BOOL)) return VarType::BOOL;
     if (match(TokenType::INT4)) return VarType::INT4;
     if (match(TokenType::INT8)) return VarType::INT8;
