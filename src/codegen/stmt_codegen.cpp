@@ -484,7 +484,6 @@ llvm::Value* StatementCodeGen::codegenAssignment(CodeGen& context, AssignmentStm
 llvm::Value* StatementCodeGen::codegenExprStmt(CodeGen& context, ExprStmt& stmt) {
     return stmt.getExpr()->codegen(context);
 }
-
 llvm::Value* StatementCodeGen::codegenGlobalVariable(CodeGen& context, VariableDecl& decl) {
     if (decl.getType() == VarType::VOID) {
         throw std::runtime_error("Cannot declare global variable of type 'void'");
@@ -496,7 +495,24 @@ llvm::Value* StatementCodeGen::codegenGlobalVariable(CodeGen& context, VariableD
     context.registerGlobalVariable(decl.getName());
     std::cout << "DEBUG codegenGlobalVariable: Registering global variable '" << decl.getName() << "'" << std::endl;
     
-    auto varType = context.getLLVMType(decl.getType());
+    llvm::Type* varType = nullptr;
+    if (decl.getType() == VarType::STRUCT) {
+        const std::string& structName = decl.getStructName();
+        std::cout << "DEBUG: Global variable '" << decl.getName() << "' has struct type: '" << structName << "'" << std::endl;
+        
+        if (structName.empty()) {
+            throw std::runtime_error("Struct type requires a struct name for global variable: " + decl.getName());
+        }
+        
+        varType = context.getStructType(structName);
+        if (!varType) {
+            throw std::runtime_error("Unknown struct type: " + structName);
+        }
+        std::cout << "DEBUG: Found struct type for global variable '" << decl.getName() << "'" << std::endl;
+    } else {
+        varType = context.getLLVMType(decl.getType());
+    }
+    
     if (!varType) {
         throw std::runtime_error("Unknown variable type for global: " + decl.getName());
     }
@@ -504,7 +520,72 @@ llvm::Value* StatementCodeGen::codegenGlobalVariable(CodeGen& context, VariableD
     llvm::Constant* initialValue = nullptr;
     
     if (decl.getValue()) {
-        if (auto* moduleExpr = dynamic_cast<ModuleExpr*>(decl.getValue().get())) {
+        if (auto* structLiteral = dynamic_cast<StructLiteralExpr*>(decl.getValue().get())) {
+            std::cout << "DEBUG: Global variable '" << decl.getName() << "' initialized with struct literal" << std::endl;
+            
+            if (decl.getType() != VarType::STRUCT) {
+                throw std::runtime_error("Struct literal can only initialize struct variables");
+            }
+
+            const std::string& structName = decl.getStructName();
+            llvm::StructType* structType = llvm::cast<llvm::StructType>(varType);
+            
+            std::vector<llvm::Constant*> fieldValues;
+            const auto& structFields = context.getStructFields(structName);
+            
+            for (size_t i = 0; i < structFields.size(); i++) {
+                const auto& fieldInfo = structFields[i];
+                llvm::Type* fieldType = structType->getElementType(i);
+                VarType fieldVarType = fieldInfo.second;
+                
+                llvm::Constant* fieldValue = createDefaultValue(fieldType, fieldVarType);
+                fieldValues.push_back(fieldValue);
+            }
+            
+            for (const auto& field : structLiteral->getFields()) {
+                std::string fieldName = field.first;
+                int fieldIndex = context.getStructFieldIndex(structName, fieldName);
+                
+                if (fieldIndex == -1) {
+                    throw std::runtime_error("Unknown field '" + fieldName + "' in struct '" + structName + "'");
+                }
+                
+                auto fieldExpr = field.second.get();
+                llvm::Constant* fieldConstant = nullptr;
+                
+                if (auto* numberExpr = dynamic_cast<NumberExpr*>(fieldExpr)) {
+                    const BigInt& bigValue = numberExpr->getValue();
+                    llvm::Type* fieldType = structType->getElementType(fieldIndex);
+                    
+                    if (TypeBounds::isUnsignedType(structFields[fieldIndex].second)) {
+                        fieldConstant = ConstantInt::get(fieldType, bigValue.toInt64(), false);
+                    } else {
+                        fieldConstant = ConstantInt::get(fieldType, bigValue.toInt64(), true);
+                    }
+                }
+                else if (auto* floatExpr = dynamic_cast<FloatExpr*>(fieldExpr)) {
+                    llvm::Type* fieldType = structType->getElementType(fieldIndex);
+                    if (fieldType->isFloatTy()) {
+                        fieldConstant = ConstantFP::get(fieldType, (float)floatExpr->getValue());
+                    } else if (fieldType->isDoubleTy()) {
+                        fieldConstant = ConstantFP::get(fieldType, floatExpr->getValue());
+                    }
+                }
+                else if (auto* boolExpr = dynamic_cast<BooleanExpr*>(fieldExpr)) {
+                    llvm::Type* fieldType = structType->getElementType(fieldIndex);
+                    fieldConstant = ConstantInt::get(fieldType, boolExpr->getValue() ? 1 : 0);
+                }
+                
+                if (fieldConstant) {
+                    fieldValues[fieldIndex] = fieldConstant;
+                } else {
+                    throw std::runtime_error("Global struct variables can only be initialized with constant expressions");
+                }
+            }
+            
+            initialValue = llvm::ConstantStruct::get(structType, fieldValues);
+        }
+        else if (auto* moduleExpr = dynamic_cast<ModuleExpr*>(decl.getValue().get())) {
             const std::string& moduleName = moduleExpr->getModuleName();
             
             if (moduleName == "std") {
@@ -744,7 +825,20 @@ llvm::Value* StatementCodeGen::codegenGlobalVariable(CodeGen& context, VariableD
             }
         }
     } else {
-        if (decl.getType() == VarType::FLOAT32) {
+        if (decl.getType() == VarType::STRUCT) {
+            const std::string& structName = decl.getStructName();
+            llvm::StructType* structType = llvm::cast<llvm::StructType>(varType);
+            
+            std::vector<llvm::Constant*> fieldValues;
+            for (size_t i = 0; i < structType->getNumElements(); i++) {
+                llvm::Type* fieldType = structType->getElementType(i);
+                llvm::Constant* fieldValue = llvm::Constant::getNullValue(fieldType);
+                fieldValues.push_back(fieldValue);
+            }
+            
+            initialValue = llvm::ConstantStruct::get(structType, fieldValues);
+        }
+        else if (decl.getType() == VarType::FLOAT32) {
             initialValue = ConstantFP::get(Type::getFloatTy(llvmContext), 0.0);
         }
         else if (decl.getType() == VarType::FLOAT64) {

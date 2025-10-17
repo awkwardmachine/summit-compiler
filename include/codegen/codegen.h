@@ -100,6 +100,9 @@ public:
         return globalVariables.count(name) > 0;
     }
     
+    const std::unordered_map<std::string, llvm::StructType*>& getStructTypes() const {
+        return structTypes;
+    }
 
     /* Struct type management */
     void registerStructType(const std::string& name, llvm::StructType* type, 

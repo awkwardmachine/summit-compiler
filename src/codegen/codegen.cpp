@@ -624,7 +624,7 @@ bool CodeGen::compileToExecutable(const std::string& outputFilename, bool verbos
             linkCmd += " -L\"" + libDir + "\"";
             linkCmd += " -l" + baseLibName;
             
-            if (!dllPath.empty()) {
+            if (isLinux || isMac) {
                 linkCmd += " -Wl,-rpath,\"" + libDir + "\"";
             }
             
@@ -648,7 +648,6 @@ bool CodeGen::compileToExecutable(const std::string& outputFilename, bool verbos
             std::cout << "Successfully created executable: " << outputFilename << std::endl;
         }
     }
-
     std::remove(objFilename.c_str());
 
     if (result != 0) {
