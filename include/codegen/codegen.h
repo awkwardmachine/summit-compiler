@@ -53,6 +53,7 @@ namespace AST {
     class Program;
     class StructDecl;
     class StructLiteralExpr;
+    class MemberAssignmentStmt;
 }
 
 class CodeGen {
@@ -170,6 +171,7 @@ public:
     /* Statement code generation methods */
     llvm::Value* codegen(AST::VariableDecl& decl);
     llvm::Value* codegen(AST::AssignmentStmt& stmt);
+    llvm::Value* codegen(AST::MemberAssignmentStmt& stmt);
     llvm::Value* codegen(AST::ExprStmt& stmt);
     llvm::Value* codegen(AST::IfStmt& stmt);
     llvm::Value* codegen(AST::BlockStmt& stmt);

@@ -14,15 +14,15 @@ unordered_map<string, TokenType> Lexer::keywords = {
     {"do", TokenType::DO}, {"enum", TokenType::ENUM}, {"stop", TokenType::STOP},
     {"next", TokenType::NEXT}, {"struct", TokenType::STRUCT},
     
-    {"int4", TokenType::INT4}, {"int8", TokenType::INT8}, {"int12", TokenType::INT12},
-    {"int16", TokenType::INT16}, {"int24", TokenType::INT24}, {"int32", TokenType::INT32},
-    {"int48", TokenType::INT48}, {"int64", TokenType::INT64},
+    {"i4", TokenType::INT4}, {"i8", TokenType::INT8}, {"i12", TokenType::INT12},
+    {"i16", TokenType::INT16}, {"i24", TokenType::INT24}, {"i32", TokenType::INT32},
+    {"i48", TokenType::INT48}, {"i64", TokenType::INT64},
     
-    {"uint0", TokenType::UINT0}, {"uint4", TokenType::UINT4}, {"uint8", TokenType::UINT8},
-    {"uint12", TokenType::UINT12}, {"uint16", TokenType::UINT16}, {"uint24", TokenType::UINT24},
-    {"uint32", TokenType::UINT32}, {"uint48", TokenType::UINT48}, {"uint64", TokenType::UINT64},
+    {"u0", TokenType::UINT0}, {"u4", TokenType::UINT4}, {"u8", TokenType::UINT8},
+    {"u12", TokenType::UINT12}, {"u16", TokenType::UINT16}, {"u24", TokenType::UINT24},
+    {"u32", TokenType::UINT32}, {"u48", TokenType::UINT48}, {"u64", TokenType::UINT64},
     
-    {"float32", TokenType::FLOAT32}, {"float64", TokenType::FLOAT64}, {"str", TokenType::STRING}
+    {"f32", TokenType::FLOAT32}, {"f64", TokenType::FLOAT64}, {"str", TokenType::STRING}
 };
 
 Lexer::Lexer(const string& input) 

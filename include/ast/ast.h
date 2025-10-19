@@ -351,7 +351,7 @@ public:
                  VarType returnType,
                  std::unique_ptr<BlockStmt> body,
                  bool isEntryPoint = false,
-                 std::string returnStructName = "")  // Add this parameter
+                 std::string returnStructName = "")
         : name(name), parameters(std::move(parameters)), 
           returnType(returnType), body(std::move(body)), 
           isEntryPoint(isEntryPoint), returnStructName(std::move(returnStructName)) {}
@@ -365,7 +365,6 @@ public:
     bool getIsEntryPoint() const { return isEntryPoint; }
     void setIsEntryPoint(bool value) { isEntryPoint = value; }
     
-    // Add getter and setter for returnStructName
     const std::string& getReturnStructName() const { return returnStructName; }
     void setReturnStructName(const std::string& name) { returnStructName = name; }
     
@@ -385,7 +384,6 @@ public:
         oss << indentStr(indent) << "FunctionStmt: " << quoted(name) 
             << " -> " << static_cast<int>(returnType);
         
-        // Show struct name if return type is STRUCT
         if (returnType == VarType::STRUCT && !returnStructName.empty()) {
             oss << " (" << returnStructName << ")";
         }
@@ -401,6 +399,33 @@ public:
         return oss.str();
     }
 };
+
+class MemberAssignmentStmt : public Stmt {
+    std::unique_ptr<Expr> object;
+    std::string memberName;
+    std::unique_ptr<Expr> value;
+
+public:
+    MemberAssignmentStmt(std::unique_ptr<Expr> obj, const std::string& member, std::unique_ptr<Expr> val)
+        : object(std::move(obj)), memberName(member), value(std::move(val)) {}
+
+    llvm::Value* codegen(::CodeGen& context) override;
+
+    const std::unique_ptr<Expr>& getObject() const { return object; }
+    const std::string& getMemberName() const { return memberName; }
+    const std::unique_ptr<Expr>& getValue() const { return value; }
+
+    std::string toString(int indent = 0) const override {
+        std::ostringstream oss;
+        oss << indentStr(indent) << "MemberAssignmentStmt: ." << memberName << "\n";
+        oss << indentStr(indent + 1) << "Object:\n";
+        oss << (object ? object->toString(indent + 2) : indentStr(indent + 2) + "null") << "\n";
+        oss << indentStr(indent + 1) << "Value:\n";
+        oss << (value ? value->toString(indent + 2) : indentStr(indent + 2) + "null");
+        return oss.str();
+    }
+};
+
 
 class WhileStmt : public Stmt {
     std::unique_ptr<Expr> condition;
@@ -629,7 +654,6 @@ class StructDecl : public Stmt {
     std::string name;
     std::vector<std::pair<std::string, VarType>> fields;
     std::vector<std::unique_ptr<FunctionStmt>> methods;
-    // Store defaults as simple map
     std::unordered_map<std::string, std::unique_ptr<Expr>> fieldDefaults;
 public:
     StructDecl(const std::string& name, 
@@ -637,12 +661,10 @@ public:
                std::vector<std::unique_ptr<FunctionStmt>> methods = {})
         : name(name), fields(std::move(fields)), methods(std::move(methods)) {}
     
-    // Simple method to add defaults
     void addFieldDefault(const std::string& fieldName, std::unique_ptr<Expr> defaultValue) {
         fieldDefaults[fieldName] = std::move(defaultValue);
     }
-    
-    // Get default value
+
     Expr* getFieldDefault(const std::string& fieldName) const {
         auto it = fieldDefaults.find(fieldName);
         return it != fieldDefaults.end() ? it->second.get() : nullptr;

@@ -1,3 +1,5 @@
 build-linux/
 build-windows/
+build/
+.xmake/
 .vscode/

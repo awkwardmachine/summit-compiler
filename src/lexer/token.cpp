@@ -7,7 +7,7 @@ Token::Token(TokenType t, const std::string& v, size_t l, size_t c)
 std::string Token::toString() const {
     static const std::unordered_map<TokenType, std::string> tokenTypeNames = {
         {TokenType::VAR, "VAR"}, {TokenType::CONST, "CONST"}, {TokenType::AS, "AS"},
-        {TokenType::IF, "IF"}, {TokenType::THEN, "THEN"}, {TokenType::ELSE, "ELSE"},
+        {TokenType::IF, "IF"}, {TokenType::THEN, "THEN"}, {TokenType::ELSE, "ELSE"}, {TokenType::ELSEIF, "ELSEIF"},
         {TokenType::AND, "AND"}, {TokenType::OR, "OR"}, {TokenType::NOT, "NOT"},
         {TokenType::END, "END"}, {TokenType::BOOL, "BOOL"}, {TokenType::TRUE, "TRUE"},
         {TokenType::FALSE, "FALSE"}, {TokenType::FUNC, "FUNC"}, {TokenType::RETURN, "RET"},

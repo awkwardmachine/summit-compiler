@@ -1,12 +1,62 @@
 const std = @import("std");
 
-struct Vector
-    x: int32;
+enum TokenType
+    Number = 1,
+    Plus = 2,
+    Unknown = 3,
 end
 
-var vec: Vector = Vector{x: 5};
+struct Token
+    ttype: TokenType = TokenType.Unknown;
+    value: i32 = 0;
+end
 
-func main() -> uint0
-    std.io.println(vec.x);
+func main() -> u0
+    var input: i32 = 0;
+    var finished: i32 = 0;
+
+    var char1: i32 = 49;
+    var char2: i32 = 43;
+    var char3: i32 = 50;
+
+    var step: i32 = 1;
+
+    while (finished == 0) then
+        var tok: Token = Token{};
+
+        if (step == 1) then
+            input = char1;
+        elseif (step == 2) then
+            input = char2;
+        elseif (step == 3) then
+            input = char3;
+        else
+            finished = 1;
+            next;
+        end
+
+        tok.value = input;
+
+        // token recognition
+        if (input >= 48 and input <= 57) then
+            tok.ttype = TokenType.Number;
+        elseif (input == 43) then
+            tok.ttype = TokenType.Plus;
+        else
+            tok.ttype = TokenType.Unknown;
+        end
+
+        // print token info
+        if (tok.ttype == TokenType.Number) then
+            std.io.println(1); // Number
+        elseif (tok.ttype == TokenType.Plus) then
+            std.io.println(2); // Plus
+        else
+            std.io.println(3); // Unknown
+        end
+
+        step += 1;
+    end
+
     ret 0;
 end

@@ -114,3 +114,7 @@ llvm::Value* StructDecl::codegen(::CodeGen& context) {
 llvm::Value* StructLiteralExpr::codegen(::CodeGen& context) {
     return context.codegen(*this);
 }
+
+llvm::Value* MemberAssignmentStmt::codegen(::CodeGen& context) {
+    return context.codegen(*this);
+}

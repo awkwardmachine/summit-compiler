@@ -277,11 +277,13 @@ unique_ptr<Expr> Parser::parseStructLiteral() {
     vector<pair<string, unique_ptr<Expr>>> fields;
     
     while (!check(TokenType::RBRACE) && !isAtEnd()) {
+        match(TokenType::DOT);
+        
         if (!match(TokenType::IDENTIFIER)) error("Expected field name");
         string fieldName = tokens[current - 1].value;
         
-        if (!match(TokenType::COLON)) {
-            error("Expected ':' after field name");
+        if (!match(TokenType::EQUALS)) {
+            error("Expected '=' after field name");
         }
         
         auto value = parseExpression();

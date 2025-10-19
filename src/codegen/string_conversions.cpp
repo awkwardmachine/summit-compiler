@@ -140,7 +140,7 @@ namespace AST {
         return buffer;
     }
 
-    llvm::Value* AST::convertToString(CodeGen& context, llvm::Value* value) {
+    llvm::Value* convertToString(CodeGen& context, llvm::Value* value) {
         auto& builder = context.getBuilder();
         auto& module = context.getModule();
         auto& llvmContext = context.getContext();

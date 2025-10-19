@@ -2193,3 +2193,81 @@ void StatementCodeGen::codegenStructMethodBodies(CodeGen& context, StructDecl& d
         }
     }
 }
+
+llvm::Value* StatementCodeGen::codegenMemberAssignment(CodeGen& context, MemberAssignmentStmt& stmt) {
+    auto& builder = context.getBuilder();
+    
+    auto* varExpr = dynamic_cast<AST::VariableExpr*>(stmt.getObject().get());
+    if (!varExpr) {
+        throw std::runtime_error("Member assignment only supports direct variable access");
+    }
+    
+    std::string varName = varExpr->getName();
+    auto var = context.lookupVariable(varName);
+    if (!var) {
+        throw std::runtime_error("Unknown variable: " + varName);
+    }
+    
+    auto varType = context.lookupVariableType(varName);
+    if (varType != VarType::STRUCT) {
+        throw std::runtime_error("Cannot access member of non-struct variable: " + varName);
+    }
+    
+    std::string structName;
+    llvm::StructType* structType = nullptr;
+    
+    if (auto* alloca = llvm::dyn_cast<llvm::AllocaInst>(var)) {
+        llvm::Type* allocatedType = alloca->getAllocatedType();
+        if (allocatedType->isStructTy()) {
+            structType = llvm::cast<llvm::StructType>(allocatedType);
+            structName = structType->getName().str();
+        }
+    } else if (auto* globalVar = llvm::dyn_cast<llvm::GlobalVariable>(var)) {
+        llvm::Type* valueType = globalVar->getValueType();
+        if (valueType->isStructTy()) {
+            structType = llvm::cast<llvm::StructType>(valueType);
+            structName = structType->getName().str();
+        }
+    }
+    
+    if (!structType || structName.empty()) {
+        throw std::runtime_error("Could not determine struct type for variable: " + varName);
+    }
+    
+    int fieldIndex = context.getStructFieldIndex(structName, stmt.getMemberName());
+    if (fieldIndex == -1) {
+        throw std::runtime_error("Unknown field '" + stmt.getMemberName() + "' in struct '" + structName + "'");
+    }
+    
+    auto value = stmt.getValue()->codegen(context);
+    
+    llvm::Value* fieldPtr = builder.CreateStructGEP(structType, var, fieldIndex, stmt.getMemberName());
+    
+    llvm::Type* expectedFieldType = structType->getElementType(fieldIndex);
+    
+    if (value->getType() != expectedFieldType) {
+        if (expectedFieldType->isIntegerTy() && value->getType()->isIntegerTy()) {
+            unsigned expectedBits = expectedFieldType->getIntegerBitWidth();
+            unsigned actualBits = value->getType()->getIntegerBitWidth();
+            
+            if (actualBits > expectedBits) {
+                value = builder.CreateTrunc(value, expectedFieldType);
+            } else if (actualBits < expectedBits) {
+                VarType sourceType = AST::inferSourceType(value, context);
+                if (AST::TypeBounds::isUnsignedType(sourceType)) {
+                    value = builder.CreateZExt(value, expectedFieldType);
+                } else {
+                    value = builder.CreateSExt(value, expectedFieldType);
+                }
+            }
+        } else if (expectedFieldType->isFPOrFPVectorTy() && value->getType()->isIntegerTy()) {
+            value = builder.CreateSIToFP(value, expectedFieldType);
+        } else if (expectedFieldType->isIntegerTy() && value->getType()->isFPOrFPVectorTy()) {
+            value = builder.CreateFPToSI(value, expectedFieldType);
+        }
+    }
+    
+    builder.CreateStore(value, fieldPtr);
+    
+    return value;
+}

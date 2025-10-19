@@ -65,7 +65,6 @@ unique_ptr<Stmt> Parser::parseEnumDeclaration() {
     
     return make_unique<EnumDecl>(name, move(members));
 }
-
 unique_ptr<Stmt> Parser::parseVariableDeclaration() {
     bool isConst = match(TokenType::CONST);
     if (!isConst && !match(TokenType::VAR)) error("Expected 'var' or 'const'");
@@ -86,7 +85,9 @@ unique_ptr<Stmt> Parser::parseVariableDeclaration() {
             string typeName = peek().value;
             advance();
             
-            if (isStructType(typeName)) {
+            if (isEnumType(typeName)) {
+                type = VarType::INT32;
+            } else if (isStructType(typeName)) {
                 type = VarType::STRUCT;
                 structName = typeName;
             } else {
@@ -325,7 +326,25 @@ unique_ptr<Stmt> Parser::parseFunctionDeclaration() {
             if (!match(TokenType::IDENTIFIER)) error("Expected parameter name");
             string paramName = tokens[current - 1].value;
             if (!match(TokenType::COLON)) error("Expected ':' after parameter name");
-            VarType paramType = parseType();
+            
+            VarType paramType;
+
+            if (check(TokenType::IDENTIFIER)) {
+                string typeName = peek().value;
+                
+                if (isEnumType(typeName)) {
+                    paramType = VarType::INT32;
+                    advance();
+                } else if (isStructType(typeName)) {
+                    paramType = VarType::STRUCT;
+                    advance();
+                } else {
+                    paramType = parseType();
+                }
+            } else {
+                paramType = parseType();
+            }
+            
             parameters.emplace_back(paramName, paramType);
         } while (match(TokenType::COMMA));
     }
@@ -340,7 +359,11 @@ unique_ptr<Stmt> Parser::parseFunctionDeclaration() {
         
         if (check(TokenType::IDENTIFIER)) {
             string typeName = peek().value;
-            if (isStructType(typeName)) {
+            
+            if (isEnumType(typeName)) {
+                returnType = VarType::INT32;
+                advance();
+            } else if (isStructType(typeName)) {
                 returnType = VarType::STRUCT;
                 returnStructName = typeName;
                 advance();
@@ -528,7 +551,23 @@ unique_ptr<Stmt> Parser::parseStructDeclaration() {
             advance();
             advance();
             
-            VarType fieldType = parseType();
+            VarType fieldType;
+
+            if (check(TokenType::IDENTIFIER)) {
+                string typeName = peek().value;
+                
+                if (isEnumType(typeName)) {
+                    fieldType = VarType::INT32;
+                    advance();
+                } else if (isStructType(typeName)) {
+                    fieldType = VarType::STRUCT;
+                    advance();
+                } else {
+                    fieldType = parseType();
+                }
+            } else {
+                fieldType = parseType();
+            }
             
             fields.emplace_back(fieldName, fieldType);
 
@@ -580,7 +619,25 @@ unique_ptr<FunctionStmt> Parser::parseMethodDeclaration(const string& structName
             if (!match(TokenType::IDENTIFIER)) error("Expected parameter name");
             string paramName = tokens[current - 1].value;
             if (!match(TokenType::COLON)) error("Expected ':' after parameter name");
-            VarType paramType = parseType();
+            
+            VarType paramType;
+            
+            if (check(TokenType::IDENTIFIER)) {
+                string typeName = peek().value;
+                
+                if (isEnumType(typeName)) {
+                    paramType = VarType::INT32;
+                    advance();
+                } else if (isStructType(typeName)) {
+                    paramType = VarType::STRUCT;
+                    advance();
+                } else {
+                    paramType = parseType();
+                }
+            } else {
+                paramType = parseType();
+            }
+            
             parameters.emplace_back(paramName, paramType);
         } while (match(TokenType::COMMA));
     }
@@ -596,9 +653,12 @@ unique_ptr<FunctionStmt> Parser::parseMethodDeclaration(const string& structName
         if (check(TokenType::IDENTIFIER)) {
             string typeName = peek().value;
             std::cout << "DEBUG parseMethodDeclaration: Found return type identifier: '" << typeName << "'" << std::endl;
-            std::cout << "DEBUG parseMethodDeclaration: Is struct type? " << isStructType(typeName) << std::endl;
             
-            if (isStructType(typeName)) {
+            if (isEnumType(typeName)) {
+                returnType = VarType::INT32;
+                advance();
+                std::cout << "DEBUG parseMethodDeclaration: Set return type to INT32 (enum)" << std::endl;
+            } else if (isStructType(typeName)) {
                 returnType = VarType::STRUCT;
                 returnStructName = typeName;
                 advance();
@@ -636,7 +696,12 @@ unique_ptr<FunctionStmt> Parser::parseMethodDeclaration(const string& structName
     
     return method;
 }
+
 unique_ptr<Stmt> Parser::parseStatement() {
+    std::cout << "DEBUG parseStatement: current token = " 
+              << tokens[current].value 
+              << " type = " << static_cast<int>(tokens[current].type)
+              << " at line " << tokens[current].line << std::endl;
     if (check(TokenType::ENTRYPOINT)) {
         return parseEntrypointStatement();
     }
@@ -676,7 +741,7 @@ unique_ptr<Stmt> Parser::parseStatement() {
     if (check(TokenType::IDENTIFIER)) {
         return parseAssignmentOrIncrement();
     }
-    
+
     auto expr = parseExpression();
     
     const Token& lastToken = tokens[current - 1];
@@ -687,6 +752,54 @@ unique_ptr<Stmt> Parser::parseStatement() {
 }
 
 unique_ptr<Stmt> Parser::parseAssignmentOrIncrement() {
+    std::cout << "DEBUG parseAssignmentOrIncrement: current token = " 
+              << tokens[current].value << " at line " 
+              << tokens[current].line << std::endl;
+    size_t savedPos = current;
+    
+    if (check(TokenType::IDENTIFIER)) {
+        string firstName = peek().value;
+        advance();
+        
+        if (check(TokenType::DOT)) {
+            advance();
+            
+            if (!check(TokenType::IDENTIFIER)) {
+                error("Expected member name after '.'");
+            }
+            string memberName = peek().value;
+            advance();
+            
+            if (check(TokenType::EQUALS)) {
+                advance();
+                
+                auto value = parseExpression();
+                
+                const Token& lastToken = tokens[current - 1];
+                if (!match(TokenType::SEMICOLON)) {
+                    errorAt(lastToken, "Expected ';' after member assignment");
+                }
+                
+                return make_unique<MemberAssignmentStmt>(
+                    make_unique<VariableExpr>(firstName),
+                    memberName,
+                    move(value)
+                );
+            }
+            
+            current = savedPos;
+            auto expr = parseExpression();
+            
+            const Token& lastToken = tokens[current - 1];
+            if (!match(TokenType::SEMICOLON)) {
+                errorAt(lastToken, "Expected ';' after expression");
+            }
+            return make_unique<ExprStmt>(move(expr));
+        }
+
+        current = savedPos;
+    }
+    
     string name = peek().value;
     
     if (checkNext(TokenType::INCREMENT) || checkNext(TokenType::DECREMENT)) {
@@ -731,7 +844,7 @@ unique_ptr<Stmt> Parser::parseAssignmentOrIncrement() {
         auto binExpr = make_unique<BinaryExpr>(binOp, move(leftVar), move(right));
         return make_unique<AssignmentStmt>(name, move(binExpr));
     }
-    
+
     if (checkNext(TokenType::EQUALS)) {
         advance();
         advance();
@@ -743,7 +856,7 @@ unique_ptr<Stmt> Parser::parseAssignmentOrIncrement() {
         }
         return make_unique<AssignmentStmt>(name, move(value));
     }
-    
+
     auto expr = parseExpression();
     
     const Token& lastToken = tokens[current - 1];
